@@ -1,0 +1,7 @@
+interface:
+  display_name: "Podcast Generator"
+  short_description: "Generate reviewable AI podcast audio"
+  icon_small: "./assets/podcast-generator-icon-small.png"
+  icon_large: "./assets/podcast-generator-icon.png"
+  brand_color: "#9C9BFB"
+  default_prompt: "Use $podcast-generator to turn these source documents into a reviewable two-host podcast script and ElevenLabs audio package."
