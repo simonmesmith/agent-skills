@@ -1,0 +1,18 @@
+{
+  "brand_color": "#2563EB",
+  "icon_large": {
+    "filename": "icon-large.png",
+    "size": "1024x1024",
+    "prompt": "Create a polished app skill icon for 'Video Overview Generator'. Square 1024x1024. Abstract mark only, no readable text. Show a clean storyboard frame grid blended with a subtle audio waveform and a small play triangle, suggesting narrated static-image overviews assembled from documents. Use #2563EB as the dominant accent with white, near-black, and a small cyan highlight. Modern, premium, simple, high contrast, crisp edges, suitable for a Codex skill icon. No letters, no words, no watermark, no photorealism."
+  },
+  "icon_small": {
+    "filename": "icon-small.png",
+    "size": "512x512",
+    "prompt": "Create a simplified app skill icon for 'Video Overview Generator'. Square 512x512. Abstract mark only, no readable text. A single storyboard rectangle, audio waveform, and play triangle combined into one clear symbol. Use #2563EB as the dominant accent with white and near-black. Crisp, minimal, legible at small size. No letters, no words, no watermark."
+  },
+  "icon_wide": {
+    "filename": "icon-wide.png",
+    "size": "2048x1152",
+    "prompt": "Create a wide 16:9 banner image for a skill called 'Video Overview Generator'. No readable text. Show an elegant sequence of static image frames along a timeline with a clean audio waveform underneath, suggesting a document-grounded narrated overview. Use #2563EB as the dominant accent with white, near-black, and subtle cyan highlights. Premium software-tool aesthetic, clean depth, no characters, no logos, no watermark."
+  }
+}

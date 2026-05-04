@@ -1,0 +1,6 @@
+{
+  "provisional_brand_color": "#2563EB",
+  "final_brand_color": "#1058F0",
+  "color_selection_method": "Start with a deliberate accent color, generate icons using that color, then sample the final icon and update final_brand_color and agents/openai.yaml if the generated accent shifts.",
+  "notes": "Blue was chosen to signal software, briefing, and source-grounded productivity rather than entertainment video generation. The sampled final accent from icon-large.png was #1058F0."
+}

@@ -1,0 +1,9 @@
+interface:
+  display_name: "Video Overview Generator"
+  short_description: "Create narrated visual overviews from source docs."
+  icon_small: "./assets/icon-small.png"
+  icon_large: "./assets/icon-large.png"
+  brand_color: "#1058F0"
+  default_prompt: "Use $video-overview-generator to turn these documents into an editable narrated video overview."
+policy:
+  allow_implicit_invocation: true
