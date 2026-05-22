@@ -1,0 +1,8 @@
+interface:
+  display_name: "Polished Presentations"
+  short_description: "Research-to-design deck workflow"
+  icon_large: "./assets/polished-presentations-a-512.png"
+  default_prompt: "Use $polished-presentations to turn my research and direction into a polished presentation deck."
+
+policy:
+  allow_implicit_invocation: true
