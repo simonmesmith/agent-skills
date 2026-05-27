@@ -61,6 +61,10 @@ Use pronunciation dictionaries when the user provides ElevenLabs pronunciation d
 - Use inline phonetic spellings only when they are approved for the spoken script.
 - Do not silently alter brand or medical terms.
 - Keep pronunciation notes in the `pronunciation` column until approved.
+- Avoid uppercase pronunciation cues unless the term should be spelled as letters. ElevenLabs v3 can interpret all-caps tokens as acronyms and produce letter-by-letter readings.
+- Do not classify brands, product names, or misspelled variants as `acronym` unless they should actually be read letter-by-letter; use a type such as `brand-or-product` for products that need normal word-style pronunciation.
+- Prefer lowercase pronunciation payload cues for non-acronyms, for example `jel-my-toe` instead of an uppercase cue that could be read as `J-E-L`.
+- After changing a glossary, run a dry-run payload and inspect the JSON for unwanted uppercase tokens, acronym-like spellings, or stale pronunciation substitutions before live generation.
 
 If the project has an approved `pronunciation_glossary.csv`, pass it to the generator:
 

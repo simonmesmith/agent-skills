@@ -20,6 +20,7 @@ Keep the user flow short. Ask at most two setup questions for document-driven wo
 3. Check pronunciation guidance before final script approval:
    - Look for files named like `pronunciation.csv`, `glossary.*`, `brand_terms.*`, or brand/medical notes in the source set.
    - If no guidance exists, identify high-risk terms such as brands, drug names, acronyms, mechanisms, institutions, and names, then create a lightweight pronunciation glossary for review.
+   - Be conservative with glossary casing and term types for ElevenLabs: uppercase pronunciation cues or marking non-acronym brand/product names as acronyms can cause the model to spell words out as letters. Use lowercase phonetic cues when possible, and classify a term as an acronym only when it should actually be read letter-by-letter.
    - Do not hardcode medical pronunciations into the skill.
 4. Validate the script table with `scripts/validate_script.py`.
 5. After user/client approval, optionally renumber inserted IDs with `scripts/renumber_script.py`.
