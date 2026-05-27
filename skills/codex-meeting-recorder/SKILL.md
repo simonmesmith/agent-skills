@@ -35,7 +35,7 @@ recordings/
     status-server.log
 ```
 
-In v2, `live_transcript.txt` is the canonical live text stream. The preview reads this file and renders only the transcript text plus a blinking cursor while transcription is active. Codex should also use this file as the source of truth when answering questions during the meeting.
+In v2, `live_transcript.txt` is the canonical live text stream. The preview reads this file and renders only the transcript text plus a blinking cursor while transcription is active. Codex should also use this file as the source of truth when answering questions during the meeting. Live text is source-labeled as `[Microphone]` or `[System]` because the realtime worker runs separate transcription sessions for microphone and system audio. The preview page renders these plain-text tags as small icon badges, but the transcript file stays plain text for search, audit, and downstream formatting.
 
 When the meeting stops, the controller writes `formatted_transcript.md` from the live stream for future reading and final summarization. Treat `formatted_transcript.md` as a post-meeting artifact, not a live source.
 
@@ -44,6 +44,10 @@ The legacy `recording.mp4` and `scripts/transcription.py` path remains available
 While transcription is active, the controller starts a localhost preview page and stores its URL in `recordings/.current-recording.json`.
 
 By default, startup runs a short source-specific audio health check before declaring the recorder live. The check probes enabled microphone and system audio separately, records bytes captured, sample count, RMS, peak, thresholds, and warnings in `metadata.json`, and writes helper diagnostics to `audio-health.log`. If a source appears silent, report the warning to the user before the meeting continues. Use `--strict-audio-health-check` when startup should fail on a silent enabled source, or `--no-audio-health-check` only when debugging the health check itself. The live realtime gate defaults are intentionally sensitive (`--silence-threshold 8 --peak-threshold 80`) so quiet but valid microphone input is not dropped after passing the health check.
+
+Source diarization is deterministic for the first layer: microphone audio and system audio are emitted from one ScreenCaptureKit stream as source-tagged PCM chunks, then routed to separate realtime transcription sessions. The labels survive in `live_transcript.txt`, `formatted_transcript.md`, optional `transcript_events.jsonl`, and `metadata.json`. Do not treat `[System]` as true speaker diarization; individual remote speaker labels still require a later post-meeting diarization pass. The default overlap policy is `suppress-mic`, meaning microphone chunks are withheld while system audio is active to reduce speaker bleed in the microphone stream. Use `--source-overlap-policy keep` when preserving interruptions matters more than suppressing duplicate system audio.
+
+The default meeting-mode realtime settings favor transcript quality over instant captions: `--delay medium`, `--commit-interval 6.0`, and `--audio-chunk-ms 200`. Use `--delay minimal` or shorter commit intervals only for live-caption behavior where latency matters more than transcript quality.
 
 For debugging only, `start --save-events` writes `transcript_events.jsonl`, and `start --save-raw-audio` writes `input_audio.pcm`. Do not enable raw audio for ordinary meetings because PCM grows quickly.
 
@@ -85,6 +89,7 @@ python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace
 python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --save-events
 python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --strict-audio-health-check
 python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --no-audio-health-check
+python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --delay high --commit-interval 8.0
 python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --backend local-nemotron
 ```
 
@@ -146,10 +151,10 @@ Keep notes grounded in the transcript. If speaker labels are unavailable, do not
 ## Current Limitations
 
 - v2 writes live transcript files, not a combined MP4, on the default realtime path. Separate system/microphone tracks are a future improvement.
-- v2 uses `gpt-realtime-whisper` through `scripts/realtime_transcription.py`. The backend boundary is intentionally small so a local streaming ASR backend, such as Nemotron via NeMo/Riva, can be added later.
+- v2 uses `gpt-realtime-whisper` through `scripts/realtime_transcription.py`, with source-tagged audio routed to separate realtime sessions for microphone and system audio. The backend boundary is intentionally small so a local streaming ASR backend, such as Nemotron via NeMo/Riva, can be added later.
 - ScreenCaptureKit permission prompts are controlled by macOS.
 - The realtime worker uses `caffeinate` while capture is active because ScreenCaptureKit can fail to enumerate displays when the display is asleep.
 - A source-specific startup health check warns when microphone or system audio appears silent before the realtime worker starts.
 - A small local silence gate avoids sending empty audio commits during quiet moments.
 - Raw Realtime events and raw PCM audio are debug-only opt-ins, not normal meeting outputs.
-- The Swift helper still supports the legacy MP4 recording mode, but the realtime path uses `stream-pcm` to emit 24 kHz mono PCM for the Realtime API.
+- The Swift helper still supports the legacy MP4 recording mode, but the realtime path uses `stream-pcm-json` to emit source-tagged 24 kHz mono PCM for the Realtime API.

@@ -19,9 +19,11 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
+ASSETS_DIR = SKILL_DIR / "assets"
 HELPER_DIR = SKILL_DIR / "helper"
 HELPER_BIN = HELPER_DIR / ".build" / "release" / "codex-meeting-recorder"
 TRANSCRIPTION_CLI = SKILL_DIR / "scripts" / "transcription.py"
@@ -177,7 +179,42 @@ def write_formatted_transcript(recording_dir: Path, live_transcript: Path) -> Pa
     return formatted_path
 
 
-def render_status_html(payload: dict[str, Any]) -> str:
+def source_icon_html(source: str) -> str:
+    icon = "microphone-solid-full.svg" if source == "Microphone" else "volume-high-solid-full.svg"
+    label = "Microphone" if source == "Microphone" else "System audio"
+    return (
+        f'<span class="source-badge source-{source.lower()}" title="{label}" aria-label="{label}">'
+        f'<span class="source-icon" style="--source-icon-url: url(&quot;/assets/{icon}&quot;)" aria-hidden="true"></span>'
+        "</span>"
+    )
+
+
+def render_transcript_preview_html(text: str) -> str:
+    escaped = html.escape(text.rstrip("\r\n"))
+    return re.sub(
+        r"^\[(Microphone|System)\]\s*",
+        lambda match: source_icon_html(match.group(1)),
+        escaped,
+        flags=re.MULTILINE,
+    )
+
+
+def theme_style_from_path(path: str) -> str:
+    params = parse_qs(urlparse(path).query)
+    css_names = {
+        "accent": ["--recorder-accent"],
+        "surface": ["--recorder-page-surface", "--recorder-badge-surface"],
+        "ink": ["--recorder-ink"],
+    }
+    declarations = []
+    for param, css_name_list in css_names.items():
+        value = unquote(params.get(param, [""])[0]).strip()
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+            declarations.extend(f"{css_name}: {value.lower()};" for css_name in css_name_list)
+    return " ".join(declarations)
+
+
+def render_status_html(payload: dict[str, Any], *, theme_style: str = "") -> str:
     active = bool(payload.get("active"))
     transcript = ""
     transcript_file = payload.get("transcript_file")
@@ -186,7 +223,7 @@ def render_status_html(payload: dict[str, Any]) -> str:
         if path.exists():
             transcript = path.read_text(encoding="utf-8", errors="replace")
     initial_payload = html.escape(json.dumps(payload), quote=False)
-    initial_transcript = html.escape(transcript.rstrip("\r\n"))
+    initial_transcript = render_transcript_preview_html(transcript)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -196,15 +233,28 @@ def render_status_html(payload: dict[str, Any]) -> str:
   <title>Live Transcript</title>
   <style>
     :root {{
-      color-scheme: light;
+      color-scheme: light dark;
+      --recorder-accent: var(--codex-base-accent, #339cff);
+      --recorder-page-surface: var(--codex-base-surface, #ffffff);
+      --recorder-badge-surface: var(--codex-base-surface, #ffffff);
+      --recorder-ink: var(--codex-base-ink, #1a1c1f);
+      --recorder-muted: color-mix(in srgb, var(--recorder-ink) 8%, var(--recorder-page-surface));
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      background: #fff;
-      color: #111;
+      background: var(--recorder-page-surface);
+      color: var(--recorder-ink);
+      {theme_style}
+    }}
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --recorder-page-surface: var(--codex-base-surface, #181818);
+        --recorder-badge-surface: var(--codex-base-surface, #181818);
+        --recorder-ink: var(--codex-base-ink, #ffffff);
+      }}
     }}
     body {{
       margin: 0;
       min-height: 100vh;
-      background: #fff;
+      background: var(--recorder-page-surface);
     }}
     main {{
       box-sizing: border-box;
@@ -215,11 +265,39 @@ def render_status_html(payload: dict[str, Any]) -> str:
       font-size: 16px;
       line-height: 1.6;
     }}
+    .source-badge {{
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      width: 1.45em;
+      height: 1.45em;
+      margin-right: 0.5em;
+      border-radius: 999px;
+      vertical-align: -0.18em;
+      border: 1px solid transparent;
+    }}
+    .source-microphone {{
+      color: #ffffff;
+      background: var(--recorder-accent);
+    }}
+    .source-system {{
+      color: var(--recorder-page-surface);
+      background: var(--recorder-ink);
+      border-color: color-mix(in srgb, var(--recorder-ink) 18%, transparent);
+    }}
+    .source-icon {{
+      display: block;
+      width: 0.72em;
+      height: 0.72em;
+      background: currentColor;
+      -webkit-mask: var(--source-icon-url) center / contain no-repeat;
+      mask: var(--source-icon-url) center / contain no-repeat;
+    }}
     #cursor {{
       display: { "inline-block" if active else "none" };
       width: 1ch;
       margin-left: 1px;
-      border-bottom: 2px solid #111;
+      border-bottom: 2px solid var(--recorder-ink);
       animation: blink 1s steps(2, start) infinite;
       transform: translateY(.12em);
     }}
@@ -245,7 +323,7 @@ def render_status_html(payload: dict[str, Any]) -> str:
           fetch("/transcript", {{ cache: "no-store" }})
         ]);
         if (transcriptResponse.ok) {{
-          els.text.textContent = (await transcriptResponse.text()).replace(/[\\r\\n]+$/g, "");
+          els.text.innerHTML = renderTranscript(await transcriptResponse.text());
           window.scrollTo(0, document.body.scrollHeight);
         }}
         if (statusResponse.ok) {{
@@ -254,6 +332,27 @@ def render_status_html(payload: dict[str, Any]) -> str:
         }}
       }} catch (error) {{
       }}
+    }}
+
+    function escapeHtml(value) {{
+      return value.replace(/[&<>"']/g, (char) => ({{
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }}[char]));
+    }}
+
+    function renderTranscript(value) {{
+      return escapeHtml(value.replace(/[\\r\\n]+$/g, "")).replace(
+        /^\\[(Microphone|System)\\]\\s*/gm,
+        (_, source) => {{
+          const icon = source === "Microphone" ? "microphone-solid-full.svg" : "volume-high-solid-full.svg";
+          const label = source === "Microphone" ? "Microphone" : "System audio";
+          return `<span class="source-badge source-${{source.toLowerCase()}}" title="${{label}}" aria-label="${{label}}"><span class="source-icon" style="--source-icon-url: url(&quot;/assets/${{icon}}&quot;)" aria-hidden="true"></span></span>`;
+        }}
+      );
     }}
 
     els.cursor.style.display = initial.active ? "inline-block" : "none";
@@ -270,7 +369,12 @@ def stop_active_recording(workspace: Path, timeout: float, *, transcribe_after: 
 
     pid = int(state["pid"])
     if is_running(pid):
-        os.kill(pid, signal.SIGINT)
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGINT)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            os.kill(pid, signal.SIGINT)
         deadline = time.time() + timeout
         while time.time() < deadline and is_running(pid):
             time.sleep(0.25)
@@ -377,6 +481,8 @@ def realtime_worker_command(args: argparse.Namespace, out_dir: Path) -> list[str
         str(args.peak_threshold),
         "--trailing-silence-chunks",
         str(args.trailing_silence_chunks),
+        "--source-overlap-policy",
+        args.source_overlap_policy,
     ]
     if not args.system_audio:
         command.append("--no-system-audio")
@@ -468,7 +574,7 @@ def run_audio_health_check(args: argparse.Namespace, out_dir: Path) -> dict[str,
         elif rms < silence_threshold and peak < peak_threshold:
             status = "silent"
             if source == "microphone":
-                message = "Microphone stream appears silent. Check macOS input device, Zoom input device, and microphone permissions."
+                message = "Microphone stream appears silent. Check macOS input device, meeting app input device, and microphone permissions."
             else:
                 message = "System audio stream appears silent. Check macOS Screen Recording permission and confirm meeting audio is playing."
 
@@ -544,11 +650,18 @@ def start(args: argparse.Namespace) -> None:
         "system_audio": bool(args.system_audio),
         "microphone": bool(args.microphone),
         "audio_health_check": audio_health_check,
+        "source_diarization": {
+            "enabled": True,
+            "microphone_label": "Microphone" if args.microphone else None,
+            "system_label": "System" if args.system_audio else None,
+            "strategy": "tagged_single_capture_separate_realtime_sessions",
+        },
         "audio_gate": {
             "silence_threshold": args.silence_threshold,
             "peak_threshold": args.peak_threshold,
             "trailing_silence_chunks": args.trailing_silence_chunks,
         },
+        "source_overlap_policy": args.source_overlap_policy,
     }
     if args.save_raw_audio:
         state["raw_audio_file"] = str(out_dir / "input_audio.pcm")
@@ -617,20 +730,29 @@ def serve_status(args: argparse.Namespace) -> None:
 
         def do_GET(self) -> None:
             payload = status_payload(workspace)
-            if self.path == "/status":
+            parsed_path = urlparse(self.path)
+            if parsed_path.path == "/status":
                 self._send(200, "application/json", json.dumps(payload, indent=2, sort_keys=True))
                 return
-            if self.path == "/transcript":
+            if parsed_path.path == "/transcript":
                 transcript_file = payload.get("transcript_file")
                 if transcript_file and Path(str(transcript_file)).exists():
                     self._send(200, "text/plain; charset=utf-8", Path(str(transcript_file)).read_text(encoding="utf-8", errors="replace"))
                 else:
                     self._send(200, "text/plain; charset=utf-8", "")
                 return
-            self._send(200, "text/html; charset=utf-8", render_status_html(payload))
+            if parsed_path.path.startswith("/assets/"):
+                asset_name = Path(parsed_path.path).name
+                asset_path = ASSETS_DIR / asset_name
+                if asset_path.exists() and asset_path.suffix == ".svg":
+                    self._send(200, "image/svg+xml", asset_path.read_bytes())
+                else:
+                    self._send(404, "text/plain; charset=utf-8", "Not found")
+                return
+            self._send(200, "text/html; charset=utf-8", render_status_html(payload, theme_style=theme_style_from_path(self.path)))
 
         def do_POST(self) -> None:
-            if self.path != "/stop":
+            if urlparse(self.path).path != "/stop":
                 self._send(404, "text/plain; charset=utf-8", "Not found")
                 return
             try:
@@ -708,9 +830,9 @@ def main() -> int:
     start_parser.add_argument("--backend", choices=["openai-realtime-whisper", "local-nemotron"], default="openai-realtime-whisper")
     start_parser.add_argument("--model", default="gpt-realtime-whisper")
     start_parser.add_argument("--language", default="en")
-    start_parser.add_argument("--delay", choices=["minimal", "low", "medium", "high", "xhigh"], default="low")
-    start_parser.add_argument("--commit-interval", type=float, default=3.0)
-    start_parser.add_argument("--audio-chunk-ms", type=int, default=100)
+    start_parser.add_argument("--delay", choices=["minimal", "low", "medium", "high", "xhigh"], default="medium")
+    start_parser.add_argument("--commit-interval", type=float, default=6.0)
+    start_parser.add_argument("--audio-chunk-ms", type=int, default=200)
     start_parser.add_argument("--silence-threshold", type=float, default=8.0)
     start_parser.add_argument("--peak-threshold", type=float, default=80.0)
     start_parser.add_argument("--audio-health-check", action=argparse.BooleanOptionalAction, default=True)
@@ -721,6 +843,7 @@ def main() -> int:
     start_parser.add_argument("--system-silence-threshold", type=float, default=10.0)
     start_parser.add_argument("--system-peak-threshold", type=float, default=120.0)
     start_parser.add_argument("--trailing-silence-chunks", type=int, default=5)
+    start_parser.add_argument("--source-overlap-policy", choices=["keep", "suppress-mic", "mark-overlap"], default="suppress-mic")
     start_parser.add_argument("--save-events", action="store_true", help="Debug only: save raw Realtime events as transcript_events.jsonl")
     start_parser.add_argument("--save-raw-audio", action="store_true", help="Debug only: save streamed PCM audio as input_audio.pcm")
     start_parser.set_defaults(func=start)

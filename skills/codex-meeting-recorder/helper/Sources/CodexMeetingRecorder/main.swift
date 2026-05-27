@@ -15,7 +15,7 @@ enum RecorderError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            return "Usage: codex-meeting-recorder record --out <path.mp4> [--no-system-audio] [--no-microphone]\n       codex-meeting-recorder stream-pcm [--no-system-audio] [--no-microphone]\n       codex-meeting-recorder probe-audio [--duration <seconds>] [--no-system-audio] [--no-microphone]"
+            return "Usage: codex-meeting-recorder record --out <path.mp4> [--no-system-audio] [--no-microphone]\n       codex-meeting-recorder stream-pcm [--no-system-audio] [--no-microphone]\n       codex-meeting-recorder stream-pcm-json [--no-system-audio] [--no-microphone]\n       codex-meeting-recorder probe-audio [--duration <seconds>] [--no-system-audio] [--no-microphone]"
         case .unsupportedOS:
             return "Codex Meeting Recorder requires macOS 15 or newer."
         case .noDisplay:
@@ -112,7 +112,7 @@ struct Arguments {
 }
 
 func parseArguments(_ args: [String]) throws -> Arguments {
-    guard let mode = args.first, ["record", "stream-pcm", "probe-audio"].contains(mode) else {
+    guard let mode = args.first, ["record", "stream-pcm", "stream-pcm-json", "probe-audio"].contains(mode) else {
         throw RecorderError.usage
     }
 
@@ -359,10 +359,17 @@ final class SignalBox {
 }
 
 final class PCMStreamOutput: NSObject, SCStreamOutput {
+    private static let outputLock = NSLock()
     private let outputRate = 24_000.0
     private let output = FileHandle.standardOutput
-    private let writeLock = NSLock()
+    private let source: String
+    private let tagged: Bool
     private var sourcePosition = 0.0
+
+    init(source: String, tagged: Bool = false) {
+        self.source = source
+        self.tagged = tagged
+    }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
         guard CMSampleBufferDataIsReady(sampleBuffer), CMSampleBufferGetNumSamples(sampleBuffer) > 0 else {
@@ -372,9 +379,21 @@ final class PCMStreamOutput: NSObject, SCStreamOutput {
         do {
             let data = try pcm16Mono24k(from: sampleBuffer)
             guard !data.isEmpty else { return }
-            writeLock.lock()
-            output.write(data)
-            writeLock.unlock()
+            PCMStreamOutput.outputLock.lock()
+            if tagged {
+                let payload: [String: Any] = [
+                    "source": source,
+                    "timestamp": Date().timeIntervalSince1970,
+                    "audio": data.base64EncodedString()
+                ]
+                if let json = try? JSONSerialization.data(withJSONObject: payload) {
+                    output.write(json)
+                    output.write(Data("\n".utf8))
+                }
+            } else {
+                output.write(data)
+            }
+            PCMStreamOutput.outputLock.unlock()
         } catch {
             if let recorderError = error as? RecorderError {
                 fputs("audio_sample_failed: \(recorderError.description)\n", stderr)
@@ -537,8 +556,8 @@ struct CodexMeetingRecorder {
         configuration.excludesCurrentProcessAudio = true
         configuration.captureMicrophone = args.captureMicrophone
 
-        if args.mode == "stream-pcm" {
-            try await streamPCM(filter: filter, configuration: configuration)
+        if args.mode == "stream-pcm" || args.mode == "stream-pcm-json" {
+            try await streamPCM(filter: filter, configuration: configuration, tagged: args.mode == "stream-pcm-json")
             return
         }
 
@@ -589,11 +608,11 @@ struct CodexMeetingRecorder {
         try? await stream.stopCapture()
     }
 
-    static func streamPCM(filter: SCContentFilter, configuration: SCStreamConfiguration) async throws {
+    static func streamPCM(filter: SCContentFilter, configuration: SCStreamConfiguration, tagged: Bool) async throws {
         let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
         let queue = DispatchQueue(label: "codex-meeting-recorder.audio-output")
-        let systemOutput = PCMStreamOutput()
-        let microphoneOutput = PCMStreamOutput()
+        let systemOutput = PCMStreamOutput(source: "system", tagged: tagged)
+        let microphoneOutput = PCMStreamOutput(source: "microphone", tagged: tagged)
 
         if configuration.capturesAudio {
             try stream.addStreamOutput(systemOutput, type: .audio, sampleHandlerQueue: queue)
