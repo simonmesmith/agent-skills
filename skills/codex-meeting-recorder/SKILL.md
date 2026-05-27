@@ -14,6 +14,7 @@ Record and live-transcribe a meeting from the current workspace. The default v2 
 - `OPENAI_API_KEY` available when live transcription starts.
 - `websocket-client` available to the realtime worker. If missing, the controller can use `uv run --with websocket-client` automatically when `uv` is installed.
 - Python OpenAI SDK available only when using the legacy finished-file transcriber. If missing, the controller can use `uv run --with openai` automatically when `uv` is installed.
+- Browser plugin available for opening the localhost preview in Codex's in-app browser.
 - First recording may prompt for Screen Recording and Microphone permissions. If macOS grants permission but capture fails, ask the user to restart Codex/Terminal and retry.
 - Start commands should be run outside Codex's command sandbox when available, because the live status page binds a localhost port and macOS permissions may need direct process access.
 
@@ -57,7 +58,7 @@ Start live transcription:
 python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace .
 ```
 
-After start, immediately open the returned `status_url` in Codex's in-app browser/preview, then share the URL with the user. When using the in-app browser, explicitly set browser visibility to true before navigating to the URL. The preview is intentionally minimal: a white page with transcribed text and a subtle blinking cursor while transcription is live.
+After start, immediately open the returned `status_url` in Codex's in-app browser/preview, then share the URL with the user. Do not use `open <status_url>`, `open -a`, or any other macOS/default-browser command for the preview. Use the Browser plugin workflow in `references/open_preview_in_codex_browser.md`, explicitly set browser visibility to true, and navigate the preview pane to the returned URL. The preview is intentionally minimal: a white page with transcribed text and a subtle blinking cursor while transcription is live.
 
 Stop live transcription:
 
@@ -119,7 +120,7 @@ python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" transcribe --work
 ## Workflow
 
 1. Start live transcription when the user asks.
-2. Immediately open the returned `status_url` in Codex's in-app browser/preview so the live transcript is visible without the user doing anything. For the in-app browser, explicitly set the browser visibility capability to true before navigation.
+2. Immediately open the returned `status_url` in Codex's in-app browser/preview so the live transcript is visible without the user doing anything. Follow `references/open_preview_in_codex_browser.md`; never use shell `open` for this URL. For the in-app browser, explicitly set the browser visibility capability to true before navigation.
 3. Return the `status_url` so the user can also open it manually if needed.
 4. Leave the background realtime worker running until the user asks to stop.
 5. If the user asks questions during the meeting, load or search the active `transcript_file`; do not build a separate preview API client.

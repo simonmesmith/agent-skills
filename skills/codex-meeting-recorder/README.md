@@ -21,7 +21,8 @@ Debug-only outputs:
 - Realtime punctuation and capitalization are imperfect. `live_transcript.txt` intentionally stays close to the streamed model output.
 - `formatted_transcript.md` currently applies only lightweight whitespace and paragraph formatting.
 - The preview is intentionally plain: white background, transcript text, and a blinking cursor while active.
-- The controller should open the preview in the Codex in-app browser and explicitly set browser visibility before navigation.
+- The preview should be opened through the Codex in-app Browser workflow, never with macOS `open` or a default-browser command.
+- The controller returns `status_url`; the agent should open it in the Codex in-app browser, explicitly set browser visibility before navigation, and include the URL in the final response as a manual fallback.
 - ScreenCaptureKit can fail when displays are asleep, so the worker wakes the display and holds a `caffeinate` assertion while capture is active.
 
 ## Future Considerations
