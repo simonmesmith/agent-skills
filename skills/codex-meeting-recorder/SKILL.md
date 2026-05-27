@@ -43,7 +43,7 @@ The legacy `recording.mp4` and `scripts/transcription.py` path remains available
 
 While transcription is active, the controller starts a localhost preview page and stores its URL in `recordings/.current-recording.json`.
 
-By default, startup runs a short source-specific audio health check before declaring the recorder live. The check probes enabled microphone and system audio separately, records bytes captured, sample count, RMS, peak, thresholds, and warnings in `metadata.json`, and writes helper diagnostics to `audio-health.log`. If a source appears silent, report the warning to the user before the meeting continues. Use `--strict-audio-health-check` when startup should fail on a silent enabled source, or `--no-audio-health-check` only when debugging the health check itself.
+By default, startup runs a short source-specific audio health check before declaring the recorder live. The check probes enabled microphone and system audio separately, records bytes captured, sample count, RMS, peak, thresholds, and warnings in `metadata.json`, and writes helper diagnostics to `audio-health.log`. If a source appears silent, report the warning to the user before the meeting continues. Use `--strict-audio-health-check` when startup should fail on a silent enabled source, or `--no-audio-health-check` only when debugging the health check itself. The live realtime gate defaults are intentionally sensitive (`--silence-threshold 8 --peak-threshold 80`) so quiet but valid microphone input is not dropped after passing the health check.
 
 For debugging only, `start --save-events` writes `transcript_events.jsonl`, and `start --save-raw-audio` writes `input_audio.pcm`. Do not enable raw audio for ordinary meetings because PCM grows quickly.
 

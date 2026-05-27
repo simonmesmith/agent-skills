@@ -544,6 +544,11 @@ def start(args: argparse.Namespace) -> None:
         "system_audio": bool(args.system_audio),
         "microphone": bool(args.microphone),
         "audio_health_check": audio_health_check,
+        "audio_gate": {
+            "silence_threshold": args.silence_threshold,
+            "peak_threshold": args.peak_threshold,
+            "trailing_silence_chunks": args.trailing_silence_chunks,
+        },
     }
     if args.save_raw_audio:
         state["raw_audio_file"] = str(out_dir / "input_audio.pcm")
@@ -706,8 +711,8 @@ def main() -> int:
     start_parser.add_argument("--delay", choices=["minimal", "low", "medium", "high", "xhigh"], default="low")
     start_parser.add_argument("--commit-interval", type=float, default=3.0)
     start_parser.add_argument("--audio-chunk-ms", type=int, default=100)
-    start_parser.add_argument("--silence-threshold", type=float, default=20.0)
-    start_parser.add_argument("--peak-threshold", type=float, default=250.0)
+    start_parser.add_argument("--silence-threshold", type=float, default=8.0)
+    start_parser.add_argument("--peak-threshold", type=float, default=80.0)
     start_parser.add_argument("--audio-health-check", action=argparse.BooleanOptionalAction, default=True)
     start_parser.add_argument("--strict-audio-health-check", action="store_true", help="Fail startup when an enabled audio source appears silent")
     start_parser.add_argument("--audio-health-duration", type=float, default=3.0)

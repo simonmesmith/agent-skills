@@ -23,7 +23,7 @@ Debug-only outputs:
 - The preview is intentionally plain: white background, transcript text, and a blinking cursor while active.
 - The preview should be opened through the Codex in-app Browser workflow, never with macOS `open` or a default-browser command.
 - The controller returns `status_url`; the agent should open it in the Codex in-app browser, explicitly set browser visibility before navigation, and include the URL in the final response as a manual fallback.
-- Startup runs a source-specific audio health check by default. It records microphone/system bytes, RMS, peak, thresholds, and warnings in `metadata.json`; use `--strict-audio-health-check` to fail startup on silence or `--no-audio-health-check` only while debugging.
+- Startup runs a source-specific audio health check by default. It records microphone/system bytes, RMS, peak, thresholds, warnings, and live gate settings in `metadata.json`; use `--strict-audio-health-check` to fail startup on silence or `--no-audio-health-check` only while debugging. The default live gate is sensitive enough for quiet microphones (`silence_threshold=8`, `peak_threshold=80`).
 - ScreenCaptureKit can fail when displays are asleep, so the worker wakes the display and holds a `caffeinate` assertion while capture is active.
 
 ## Future Considerations
