@@ -10,11 +10,12 @@ enum RecorderError: Error, CustomStringConvertible {
     case noDisplay
     case permissionDenied(String)
     case recordingFailed(String)
+    case unsupportedAudioFormat(String)
 
     var description: String {
         switch self {
         case .usage:
-            return "Usage: codex-meeting-recorder record --out <path.mp4> [--no-system-audio] [--no-microphone]"
+            return "Usage: codex-meeting-recorder record --out <path.mp4> [--no-system-audio] [--no-microphone]\n       codex-meeting-recorder stream-pcm [--no-system-audio] [--no-microphone]"
         case .unsupportedOS:
             return "Codex Meeting Recorder requires macOS 15 or newer."
         case .noDisplay:
@@ -22,6 +23,8 @@ enum RecorderError: Error, CustomStringConvertible {
         case .permissionDenied(let detail):
             return detail
         case .recordingFailed(let detail):
+            return detail
+        case .unsupportedAudioFormat(let detail):
             return detail
         }
     }
@@ -101,17 +104,18 @@ final class RecordingDelegate: NSObject, SCRecordingOutputDelegate, SCStreamDele
 }
 
 struct Arguments {
+    var mode = "record"
     var outputPath: String?
     var captureSystemAudio = true
     var captureMicrophone = true
 }
 
 func parseArguments(_ args: [String]) throws -> Arguments {
-    guard args.first == "record" else {
+    guard let mode = args.first, ["record", "stream-pcm"].contains(mode) else {
         throw RecorderError.usage
     }
 
-    var parsed = Arguments()
+    var parsed = Arguments(mode: mode)
     var index = 1
     while index < args.count {
         let arg = args[index]
@@ -132,7 +136,7 @@ func parseArguments(_ args: [String]) throws -> Arguments {
         index += 1
     }
 
-    guard parsed.outputPath != nil else {
+    guard parsed.mode != "record" || parsed.outputPath != nil else {
         throw RecorderError.usage
     }
     return parsed
@@ -205,6 +209,135 @@ final class SignalBox {
     }
 }
 
+final class PCMStreamOutput: NSObject, SCStreamOutput {
+    private let outputRate = 24_000.0
+    private let output = FileHandle.standardOutput
+    private let writeLock = NSLock()
+    private var sourcePosition = 0.0
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
+        guard CMSampleBufferDataIsReady(sampleBuffer), CMSampleBufferGetNumSamples(sampleBuffer) > 0 else {
+            return
+        }
+
+        do {
+            let data = try pcm16Mono24k(from: sampleBuffer)
+            guard !data.isEmpty else { return }
+            writeLock.lock()
+            output.write(data)
+            writeLock.unlock()
+        } catch {
+            if let recorderError = error as? RecorderError {
+                fputs("audio_sample_failed: \(recorderError.description)\n", stderr)
+            } else {
+                fputs("audio_sample_failed: \(error.localizedDescription)\n", stderr)
+            }
+        }
+    }
+
+    private func pcm16Mono24k(from sampleBuffer: CMSampleBuffer) throws -> Data {
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let streamDescriptionPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
+            throw RecorderError.unsupportedAudioFormat("Missing audio stream description.")
+        }
+
+        let streamDescription = streamDescriptionPointer.pointee
+        let channelCount = max(1, Int(streamDescription.mChannelsPerFrame))
+        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
+        var listSize = 0
+        CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: &listSize,
+            bufferListOut: nil,
+            bufferListSize: 0,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+            blockBufferOut: nil
+        )
+        if listSize <= 0 {
+            listSize = MemoryLayout<AudioBufferList>.size + max(0, channelCount - 1) * MemoryLayout<AudioBuffer>.size
+        }
+        let rawAudioBufferList = UnsafeMutableRawPointer.allocate(
+            byteCount: listSize,
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer { rawAudioBufferList.deallocate() }
+        let audioBufferList = rawAudioBufferList.bindMemory(to: AudioBufferList.self, capacity: 1)
+
+        var blockBuffer: CMBlockBuffer?
+        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: audioBufferList,
+            bufferListSize: listSize,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+            blockBufferOut: &blockBuffer
+        )
+        guard status == noErr else {
+            throw RecorderError.unsupportedAudioFormat("Could not read audio buffer list: \(status).")
+        }
+
+        let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+        let ratio = max(1.0, streamDescription.mSampleRate / outputRate)
+        var data = Data()
+        data.reserveCapacity(Int(Double(frameCount) / ratio) * 2)
+
+        while sourcePosition < Double(frameCount) {
+            let frameIndex = Int(sourcePosition)
+            let sample = sampleAt(
+                frameIndex: frameIndex,
+                channelCount: channelCount,
+                buffers: buffers,
+                streamDescription: streamDescription
+            )
+            let clamped = max(-1.0, min(1.0, sample))
+            var intSample = Int16(clamped * Double(Int16.max)).littleEndian
+            withUnsafeBytes(of: &intSample) { data.append(contentsOf: $0) }
+            sourcePosition += ratio
+        }
+        sourcePosition -= Double(frameCount)
+        return data
+    }
+
+    private func sampleAt(
+        frameIndex: Int,
+        channelCount: Int,
+        buffers: UnsafeMutableAudioBufferListPointer,
+        streamDescription: AudioStreamBasicDescription
+    ) -> Double {
+        let flags = streamDescription.mFormatFlags
+        let isFloat = (flags & kAudioFormatFlagIsFloat) != 0
+        let isSignedInteger = (flags & kAudioFormatFlagIsSignedInteger) != 0
+        let isNonInterleaved = (flags & kAudioFormatFlagIsNonInterleaved) != 0
+        let bits = Int(streamDescription.mBitsPerChannel)
+        let bytesPerSample = max(1, bits / 8)
+        let bytesPerFrame = isNonInterleaved
+            ? max(bytesPerSample, Int(streamDescription.mBytesPerFrame))
+            : max(bytesPerSample * channelCount, Int(streamDescription.mBytesPerFrame))
+
+        var total = 0.0
+        for channel in 0..<channelCount {
+            let bufferIndex = isNonInterleaved ? min(channel, buffers.count - 1) : 0
+            guard let rawPointer = buffers[bufferIndex].mData else { continue }
+            let channelOffset = isNonInterleaved ? 0 : channel * bytesPerSample
+            let byteOffset = frameIndex * bytesPerFrame + channelOffset
+            let pointer = rawPointer.advanced(by: byteOffset)
+
+            if isFloat && bits == 32 {
+                total += Double(pointer.assumingMemoryBound(to: Float.self).pointee)
+            } else if isSignedInteger && bits == 16 {
+                total += Double(Int16(littleEndian: pointer.assumingMemoryBound(to: Int16.self).pointee)) / Double(Int16.max)
+            } else if isSignedInteger && bits == 32 {
+                total += Double(Int32(littleEndian: pointer.assumingMemoryBound(to: Int32.self).pointee)) / Double(Int32.max)
+            }
+        }
+        return total / Double(channelCount)
+    }
+}
+
 @main
 struct CodexMeetingRecorder {
     static func main() async {
@@ -225,9 +358,6 @@ struct CodexMeetingRecorder {
         }
 
         let args = try parseArguments(Array(CommandLine.arguments.dropFirst()))
-        guard let outputPath = args.outputPath else {
-            throw RecorderError.usage
-        }
 
         if args.captureSystemAudio && !requestScreenCapturePermissionIfNeeded() {
             throw RecorderError.permissionDenied("Screen Recording permission is required for system audio. Grant it in System Settings, restart Codex/Terminal if macOS asks, then retry.")
@@ -240,16 +370,7 @@ struct CodexMeetingRecorder {
             }
         }
 
-        let outputURL = URL(fileURLWithPath: outputPath)
-        try FileManager.default.createDirectory(
-            at: outputURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        if FileManager.default.fileExists(atPath: outputURL.path) {
-            try FileManager.default.removeItem(at: outputURL)
-        }
-
-        let content = try await SCShareableContent.current
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first else {
             throw RecorderError.noDisplay
         }
@@ -266,6 +387,23 @@ struct CodexMeetingRecorder {
         configuration.channelCount = 2
         configuration.excludesCurrentProcessAudio = true
         configuration.captureMicrophone = args.captureMicrophone
+
+        if args.mode == "stream-pcm" {
+            try await streamPCM(filter: filter, configuration: configuration)
+            return
+        }
+
+        guard let outputPath = args.outputPath else {
+            throw RecorderError.usage
+        }
+        let outputURL = URL(fileURLWithPath: outputPath)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try FileManager.default.removeItem(at: outputURL)
+        }
 
         let delegate = RecordingDelegate()
         let stream = SCStream(filter: filter, configuration: configuration, delegate: delegate)
@@ -295,5 +433,26 @@ struct CodexMeetingRecorder {
             throw error
         }
         try? await stream.stopCapture()
+    }
+
+    static func streamPCM(filter: SCContentFilter, configuration: SCStreamConfiguration) async throws {
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
+        let queue = DispatchQueue(label: "codex-meeting-recorder.audio-output")
+        let systemOutput = PCMStreamOutput()
+        let microphoneOutput = PCMStreamOutput()
+
+        if configuration.capturesAudio {
+            try stream.addStreamOutput(systemOutput, type: .audio, sampleHandlerQueue: queue)
+        }
+        if configuration.captureMicrophone {
+            try stream.addStreamOutput(microphoneOutput, type: .microphone, sampleHandlerQueue: queue)
+        }
+
+        installSignalHandler()
+        try await stream.startCapture()
+        fputs("pcm_stream_started\n", stderr)
+        await SignalBox.shared.wait()
+        try? await stream.stopCapture()
+        fputs("pcm_stream_finished\n", stderr)
     }
 }

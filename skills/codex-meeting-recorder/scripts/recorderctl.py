@@ -8,6 +8,7 @@ import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -24,6 +25,7 @@ SKILL_DIR = Path(__file__).resolve().parents[1]
 HELPER_DIR = SKILL_DIR / "helper"
 HELPER_BIN = HELPER_DIR / ".build" / "release" / "codex-meeting-recorder"
 TRANSCRIPTION_CLI = SKILL_DIR / "scripts" / "transcription.py"
+REALTIME_TRANSCRIPTION_CLI = SKILL_DIR / "scripts" / "realtime_transcription.py"
 DEFAULT_STATUS_PORT = 47832
 
 
@@ -127,232 +129,134 @@ def status_payload(workspace: Path) -> dict[str, Any]:
         "running": running,
         "elapsed_seconds": elapsed_seconds(state.get("started_at")),
         "recording_size_bytes": file_size(state.get("recording_file")),
+        "transcript_size_bytes": file_size(state.get("transcript_file")),
     }
 
 
-def human_size(size: int) -> str:
-    value = float(size)
-    for unit in ["B", "KB", "MB", "GB"]:
-        if value < 1024 or unit == "GB":
-            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
-        value /= 1024
-    return f"{size} B"
+def cleanup_stale_state(workspace: Path, state: dict[str, Any]) -> None:
+    status_pid = state.get("status_pid")
+    if status_pid and is_running(int(status_pid)):
+        try:
+            os.kill(int(status_pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    clear_state(workspace)
+
+
+def format_transcript_text(text: str) -> str:
+    text = re.sub(r"[ \t]+", " ", text.replace("\r\n", "\n")).strip()
+    if not text:
+        return ""
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    paragraphs: list[str] = []
+    current: list[str] = []
+    current_words = 0
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        words = len(sentence.split())
+        if current and current_words + words > 90:
+            paragraphs.append(" ".join(current))
+            current = []
+            current_words = 0
+        current.append(sentence)
+        current_words += words
+    if current:
+        paragraphs.append(" ".join(current))
+    return "\n\n".join(paragraphs) + "\n"
+
+
+def write_formatted_transcript(recording_dir: Path, live_transcript: Path) -> Path:
+    formatted_path = recording_dir / "formatted_transcript.md"
+    if live_transcript.exists():
+        formatted_path.write_text(format_transcript_text(live_transcript.read_text(encoding="utf-8", errors="replace")), encoding="utf-8")
+    else:
+        formatted_path.write_text("", encoding="utf-8")
+    return formatted_path
 
 
 def render_status_html(payload: dict[str, Any]) -> str:
     active = bool(payload.get("active"))
-    elapsed = int(payload.get("elapsed_seconds", 0))
-    minutes, seconds = divmod(elapsed, 60)
-    hours, minutes = divmod(minutes, 60)
-    timer = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    recording_file = html.escape(str(payload.get("recording_file", "")))
-    recording_dir = html.escape(str(payload.get("recording_dir", "")))
-    size = human_size(int(payload.get("recording_size_bytes", 0)))
-    status_text = "Recording" if active else html.escape(str(payload.get("message", "Stopped")))
-    system_audio = "on" if payload.get("system_audio") else "off"
-    microphone = "on" if payload.get("microphone") else "off"
-    dot_class = "dot live" if active else "dot"
-    stop_disabled = "" if active else "disabled"
+    transcript = ""
+    transcript_file = payload.get("transcript_file")
+    if transcript_file:
+        path = Path(str(transcript_file))
+        if path.exists():
+            transcript = path.read_text(encoding="utf-8", errors="replace")
     initial_payload = html.escape(json.dumps(payload), quote=False)
+    initial_transcript = html.escape(transcript.rstrip("\r\n"))
 
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Codex Meeting Recorder</title>
+  <title>Live Transcript</title>
   <style>
     :root {{
-      color-scheme: light dark;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #111318;
-      color: #f4f6fb;
+      color-scheme: light;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      background: #fff;
+      color: #111;
     }}
     body {{
       margin: 0;
       min-height: 100vh;
-      display: grid;
-      place-items: center;
-      background: radial-gradient(circle at 50% 0%, #242936, #111318 54%);
+      background: #fff;
     }}
     main {{
-      width: min(560px, calc(100vw - 32px));
-      border: 1px solid rgba(255,255,255,.14);
-      border-radius: 8px;
-      padding: 22px;
-      background: rgba(20, 23, 31, .92);
-      box-shadow: 0 24px 80px rgba(0,0,0,.32);
-    }}
-    .header {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-    }}
-    .state {{
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 14px;
-      color: #cbd2df;
-    }}
-    .dot {{
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      background: #6f7684;
-    }}
-    .dot.live {{
-      background: #ff3b30;
-      box-shadow: 0 0 0 0 rgba(255,59,48,.58);
-      animation: pulse 1.3s infinite;
-    }}
-    @keyframes pulse {{
-      70% {{ box-shadow: 0 0 0 14px rgba(255,59,48,0); }}
-      100% {{ box-shadow: 0 0 0 0 rgba(255,59,48,0); }}
-    }}
-    h1 {{
-      margin: 0;
-      font-size: 18px;
-      font-weight: 650;
-      letter-spacing: 0;
-    }}
-    .timer {{
-      margin: 24px 0 18px;
-      font-variant-numeric: tabular-nums;
-      font-size: clamp(42px, 12vw, 72px);
-      line-height: 1;
-      font-weight: 700;
-    }}
-    dl {{
-      display: grid;
-      grid-template-columns: 130px 1fr;
-      gap: 10px 14px;
-      margin: 0 0 22px;
-      font-size: 13px;
-    }}
-    dt {{ color: #8f98aa; }}
-    dd {{
-      margin: 0;
-      min-width: 0;
+      box-sizing: border-box;
+      width: min(900px, 100%);
+      padding: 32px;
+      white-space: pre-wrap;
       overflow-wrap: anywhere;
-      color: #eef2f8;
+      font-size: 16px;
+      line-height: 1.6;
     }}
-    .actions {{
-      display: flex;
-      align-items: center;
-      gap: 12px;
+    #cursor {{
+      display: { "inline-block" if active else "none" };
+      width: 1ch;
+      margin-left: 1px;
+      border-bottom: 2px solid #111;
+      animation: blink 1s steps(2, start) infinite;
+      transform: translateY(.12em);
     }}
-    button {{
-      appearance: none;
-      border: 0;
-      border-radius: 7px;
-      padding: 10px 14px;
-      background: #ff453a;
-      color: white;
-      font-weight: 650;
-      cursor: pointer;
-    }}
-    button:disabled {{
-      cursor: default;
-      background: #454b57;
-      color: #aeb5c2;
-    }}
-    .hint {{
-      font-size: 12px;
-      color: #8f98aa;
+    @keyframes blink {{
+      50% {{ opacity: 0; }}
     }}
   </style>
 </head>
 <body>
-  <main>
-    <div class="header">
-      <h1>Codex Meeting Recorder</h1>
-      <div class="state"><span id="dot" class="{dot_class}"></span><span id="status-text">{status_text}</span></div>
-    </div>
-    <div id="timer" class="timer">{timer}</div>
-    <dl>
-      <dt>System audio</dt><dd id="system-audio">{system_audio}</dd>
-      <dt>Microphone</dt><dd id="microphone">{microphone}</dd>
-      <dt>File size</dt><dd id="file-size">{size}</dd>
-      <dt>Folder</dt><dd id="recording-dir">{recording_dir}</dd>
-      <dt>Recording</dt><dd id="recording-file">{recording_file}</dd>
-    </dl>
-    <div class="actions">
-      <button id="stop" {stop_disabled}>Stop Recording</button>
-      <span id="hint" class="hint">Updates every second</span>
-    </div>
-  </main>
+  <main><span id="text">{initial_transcript}</span><span id="cursor"></span></main>
   <script id="initial-payload" type="application/json">{initial_payload}</script>
   <script>
     const initial = JSON.parse(document.getElementById("initial-payload").textContent);
     const els = {{
-      dot: document.getElementById("dot"),
-      statusText: document.getElementById("status-text"),
-      timer: document.getElementById("timer"),
-      systemAudio: document.getElementById("system-audio"),
-      microphone: document.getElementById("microphone"),
-      fileSize: document.getElementById("file-size"),
-      recordingDir: document.getElementById("recording-dir"),
-      recordingFile: document.getElementById("recording-file"),
-      stop: document.getElementById("stop"),
-      hint: document.getElementById("hint")
+      text: document.getElementById("text"),
+      cursor: document.getElementById("cursor")
     }};
-
-    function formatTimer(totalSeconds) {{
-      const total = Math.max(0, Number(totalSeconds || 0));
-      const hours = Math.floor(total / 3600);
-      const minutes = Math.floor((total % 3600) / 60);
-      const seconds = total % 60;
-      return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
-    }}
-
-    function formatBytes(bytes) {{
-      let value = Number(bytes || 0);
-      for (const unit of ["B", "KB", "MB", "GB"]) {{
-        if (value < 1024 || unit === "GB") {{
-          return unit === "B" ? `${{Math.round(value)}} B` : `${{value.toFixed(1)}} ${{unit}}`;
-        }}
-        value = value / 1024;
-      }}
-      return "0 B";
-    }}
-
-    function render(payload) {{
-      const active = Boolean(payload.active);
-      els.dot.className = active ? "dot live" : "dot";
-      els.statusText.textContent = active ? "Recording" : (payload.message || "Stopped");
-      els.timer.textContent = formatTimer(payload.elapsed_seconds);
-      els.systemAudio.textContent = payload.system_audio ? "on" : "off";
-      els.microphone.textContent = payload.microphone ? "on" : "off";
-      els.fileSize.textContent = formatBytes(payload.recording_size_bytes);
-      els.recordingDir.textContent = payload.recording_dir || "";
-      els.recordingFile.textContent = payload.recording_file || "";
-      els.stop.disabled = !active;
-      els.hint.textContent = active ? "Updates every second" : "Stopped";
-    }}
 
     async function poll() {{
       try {{
-        const response = await fetch("/status", {{ cache: "no-store" }});
-        if (response.ok) {{
-          render(await response.json());
+        const [statusResponse, transcriptResponse] = await Promise.all([
+          fetch("/status", {{ cache: "no-store" }}),
+          fetch("/transcript", {{ cache: "no-store" }})
+        ]);
+        if (transcriptResponse.ok) {{
+          els.text.textContent = (await transcriptResponse.text()).replace(/[\\r\\n]+$/g, "");
+          window.scrollTo(0, document.body.scrollHeight);
+        }}
+        if (statusResponse.ok) {{
+          const payload = await statusResponse.json();
+          els.cursor.style.display = payload.active ? "inline-block" : "none";
         }}
       }} catch (error) {{
-        els.hint.textContent = "Waiting for recorder status...";
       }}
     }}
 
-    render(initial);
+    els.cursor.style.display = initial.active ? "inline-block" : "none";
     setInterval(poll, 1000);
-    document.getElementById("stop").addEventListener("click", async () => {{
-      const button = document.getElementById("stop");
-      button.disabled = true;
-      button.textContent = "Stopping...";
-      await fetch("/stop", {{ method: "POST" }});
-      button.textContent = "Stop Recording";
-      await poll();
-    }});
   </script>
 </body>
 </html>"""
@@ -373,15 +277,22 @@ def stop_active_recording(workspace: Path, timeout: float, *, transcribe_after: 
             raise SystemExit(f"Recorder pid {pid} did not stop within {timeout} seconds.")
 
     clear_state(workspace)
-    recording_file = Path(state["recording_file"])
-    if not recording_file.exists() or recording_file.stat().st_size == 0:
-        log_path = Path(state["log_file"])
-        log_text = log_path.read_text(errors="replace") if log_path.exists() else ""
-        raise SystemExit(f"Recording file was not created correctly. Log:\n{log_text}")
+    if state.get("recording_file"):
+        recording_file = Path(state["recording_file"])
+        if not recording_file.exists() or recording_file.stat().st_size == 0:
+            log_path = Path(state["log_file"])
+            log_text = log_path.read_text(errors="replace") if log_path.exists() else ""
+            raise SystemExit(f"Recording file was not created correctly. Log:\n{log_text}")
+        state["recording_size_bytes"] = recording_file.stat().st_size
+    if state.get("transcript_file"):
+        transcript_file = Path(state["transcript_file"])
+        state["transcript_size_bytes"] = transcript_file.stat().st_size if transcript_file.exists() else 0
+        formatted_path = write_formatted_transcript(Path(state["recording_dir"]), transcript_file)
+        state["formatted_transcript_file"] = str(formatted_path)
+        state["formatted_transcript_size_bytes"] = formatted_path.stat().st_size
 
     metadata_path = Path(state["recording_dir"]) / "metadata.json"
     state["stopped_at"] = datetime.now().isoformat(timespec="seconds")
-    state["recording_size_bytes"] = recording_file.stat().st_size
     metadata_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
 
     if stop_status_server:
@@ -389,7 +300,7 @@ def stop_active_recording(workspace: Path, timeout: float, *, transcribe_after: 
         if status_pid and int(status_pid) != os.getpid() and is_running(int(status_pid)):
             os.kill(int(status_pid), signal.SIGTERM)
 
-    if transcribe_after:
+    if transcribe_after and state.get("recording_file"):
         transcribe_recording(workspace, Path(state["recording_dir"]))
 
     return state
@@ -420,31 +331,81 @@ def start_status_server_process(workspace: Path, out_dir: Path) -> tuple[int, st
     return process.pid, f"http://127.0.0.1:{port}"
 
 
+def realtime_worker_command(args: argparse.Namespace, out_dir: Path) -> list[str]:
+    if not REALTIME_TRANSCRIPTION_CLI.exists():
+        raise SystemExit(f"Missing realtime transcription helper: {REALTIME_TRANSCRIPTION_CLI}")
+
+    runner = [sys.executable, "-u"]
+    try:
+        subprocess.run(
+            [sys.executable, "-c", "import websocket"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        uv = shutil.which("uv")
+        if not uv:
+            raise SystemExit("websocket-client is not installed and `uv` was not found for automatic dependency isolation.")
+        runner = [uv, "run", "--with", "websocket-client", "python", "-u"]
+
+    command = [
+        *runner,
+        str(REALTIME_TRANSCRIPTION_CLI),
+        "--helper-bin",
+        str(HELPER_BIN),
+        "--transcript",
+        str(out_dir / "live_transcript.txt"),
+        "--audio-log",
+        str(out_dir / "audio-capture.log"),
+        "--backend",
+        args.backend,
+        "--model",
+        args.model,
+        "--language",
+        args.language,
+        "--delay",
+        args.delay,
+        "--commit-interval",
+        str(args.commit_interval),
+        "--audio-chunk-ms",
+        str(args.audio_chunk_ms),
+        "--silence-threshold",
+        str(args.silence_threshold),
+        "--peak-threshold",
+        str(args.peak_threshold),
+        "--trailing-silence-chunks",
+        str(args.trailing_silence_chunks),
+    ]
+    if not args.system_audio:
+        command.append("--no-system-audio")
+    if not args.microphone:
+        command.append("--no-microphone")
+    if args.save_raw_audio:
+        command.extend(["--raw-audio", str(out_dir / "input_audio.pcm")])
+    if args.save_events:
+        command.extend(["--events", str(out_dir / "transcript_events.jsonl")])
+    return command
+
+
 def start(args: argparse.Namespace) -> None:
     workspace = args.workspace.resolve()
     existing = load_state(workspace)
-    if existing and is_running(int(existing["pid"])):
-        raise SystemExit(f"Recording already running: pid={existing['pid']} dir={existing['recording_dir']}")
+    if existing:
+        if is_running(int(existing["pid"])):
+            raise SystemExit(f"Recording already running: pid={existing['pid']} dir={existing['recording_dir']}")
+        cleanup_stale_state(workspace, existing)
 
     build_helper()
 
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     out_dir = recording_root(workspace) / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
-    recording_file = out_dir / "recording.mp4"
+    transcript_file = out_dir / "live_transcript.txt"
     log_file = out_dir / "recorder.log"
     metadata_file = out_dir / "metadata.json"
 
-    command = [
-        str(HELPER_BIN),
-        "record",
-        "--out",
-        str(recording_file),
-    ]
-    if not args.system_audio:
-        command.append("--no-system-audio")
-    if not args.microphone:
-        command.append("--no-microphone")
+    command = realtime_worker_command(args, out_dir)
 
     log_handle = log_file.open("ab")
     process = subprocess.Popen(
@@ -459,11 +420,23 @@ def start(args: argparse.Namespace) -> None:
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "workspace": str(workspace),
         "recording_dir": str(out_dir),
-        "recording_file": str(recording_file),
+        "mode": "realtime",
+        "recording_file": None,
+        "transcript_file": str(transcript_file),
+        "formatted_transcript_file": str(out_dir / "formatted_transcript.md"),
         "log_file": str(log_file),
+        "audio_log_file": str(out_dir / "audio-capture.log"),
+        "backend": args.backend,
+        "model": args.model,
+        "delay": args.delay,
+        "language": args.language,
         "system_audio": bool(args.system_audio),
         "microphone": bool(args.microphone),
     }
+    if args.save_raw_audio:
+        state["raw_audio_file"] = str(out_dir / "input_audio.pcm")
+    if args.save_events:
+        state["transcript_events_file"] = str(out_dir / "transcript_events.jsonl")
     save_state(workspace, state)
 
     try:
@@ -477,9 +450,14 @@ def start(args: argparse.Namespace) -> None:
 
     time.sleep(1.5)
     if not is_running(process.pid):
-        clear_state(workspace)
+        cleanup_stale_state(workspace, state)
         log_text = log_file.read_text(errors="replace") if log_file.exists() else ""
         raise SystemExit(f"Recorder exited during startup. Log:\n{log_text}")
+    if log_file.exists():
+        log_text = log_file.read_text(errors="replace")
+        if "audio_capture_exited" in log_text or "Error:" in log_text:
+            cleanup_stale_state(workspace, state)
+            raise SystemExit(f"Recorder startup failed. Log:\n{log_text}")
 
     print(json.dumps(state, indent=2, sort_keys=True))
 
@@ -524,6 +502,13 @@ def serve_status(args: argparse.Namespace) -> None:
             payload = status_payload(workspace)
             if self.path == "/status":
                 self._send(200, "application/json", json.dumps(payload, indent=2, sort_keys=True))
+                return
+            if self.path == "/transcript":
+                transcript_file = payload.get("transcript_file")
+                if transcript_file and Path(str(transcript_file)).exists():
+                    self._send(200, "text/plain; charset=utf-8", Path(str(transcript_file)).read_text(encoding="utf-8", errors="replace"))
+                else:
+                    self._send(200, "text/plain; charset=utf-8", "")
                 return
             self._send(200, "text/html; charset=utf-8", render_status_html(payload))
 
@@ -603,6 +588,17 @@ def main() -> int:
     start_parser.add_argument("--workspace", type=Path, default=Path.cwd())
     start_parser.add_argument("--system-audio", action=argparse.BooleanOptionalAction, default=True)
     start_parser.add_argument("--microphone", action=argparse.BooleanOptionalAction, default=True)
+    start_parser.add_argument("--backend", choices=["openai-realtime-whisper", "local-nemotron"], default="openai-realtime-whisper")
+    start_parser.add_argument("--model", default="gpt-realtime-whisper")
+    start_parser.add_argument("--language", default="en")
+    start_parser.add_argument("--delay", choices=["minimal", "low", "medium", "high", "xhigh"], default="low")
+    start_parser.add_argument("--commit-interval", type=float, default=3.0)
+    start_parser.add_argument("--audio-chunk-ms", type=int, default=100)
+    start_parser.add_argument("--silence-threshold", type=float, default=20.0)
+    start_parser.add_argument("--peak-threshold", type=float, default=250.0)
+    start_parser.add_argument("--trailing-silence-chunks", type=int, default=5)
+    start_parser.add_argument("--save-events", action="store_true", help="Debug only: save raw Realtime events as transcript_events.jsonl")
+    start_parser.add_argument("--save-raw-audio", action="store_true", help="Debug only: save streamed PCM audio as input_audio.pcm")
     start_parser.set_defaults(func=start)
 
     stop_parser = subparsers.add_parser("stop")
