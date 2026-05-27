@@ -9,7 +9,7 @@ Default meeting outputs:
 - `live_transcript.txt`: live text stream used by the preview and by Codex during a meeting.
 - `formatted_transcript.md`: post-stop readable transcript generated from the live stream.
 - `metadata.json`: run metadata and output paths.
-- `recorder.log`, `audio-capture.log`, `status-server.log`: operational logs.
+- `recorder.log`, `audio-health.log`, `audio-capture.log`, `status-server.log`: operational logs.
 
 Debug-only outputs:
 
@@ -23,6 +23,7 @@ Debug-only outputs:
 - The preview is intentionally plain: white background, transcript text, and a blinking cursor while active.
 - The preview should be opened through the Codex in-app Browser workflow, never with macOS `open` or a default-browser command.
 - The controller returns `status_url`; the agent should open it in the Codex in-app browser, explicitly set browser visibility before navigation, and include the URL in the final response as a manual fallback.
+- Startup runs a source-specific audio health check by default. It records microphone/system bytes, RMS, peak, thresholds, and warnings in `metadata.json`; use `--strict-audio-health-check` to fail startup on silence or `--no-audio-health-check` only while debugging.
 - ScreenCaptureKit can fail when displays are asleep, so the worker wakes the display and holds a `caffeinate` assertion while capture is active.
 
 ## Future Considerations
@@ -32,7 +33,7 @@ Debug-only outputs:
 - Consider server-side VAD instead of manual commits, especially if it provides useful `speech_started` and `speech_stopped` events without hurting latency.
 - Add an optional post-stop punctuation restoration pass using an LLM with strict instructions: restore punctuation and paragraphs without rewriting wording.
 - Add a local realtime backend adapter, likely behind the existing backend boundary. Candidate: NVIDIA Nemotron speech streaming or a local Whisper-compatible streaming ASR.
-- Improve microphone handling and calibration, including visible diagnostics for mic level, system audio level, and silence-gate thresholds.
+- Improve microphone handling and calibration beyond the startup health check, including visible diagnostics for mic level, system audio level, and silence-gate thresholds.
 - Add robust speaker labeling if the backend exposes speaker segments or if a diarization pass is added after stop.
 - Add a proactive Codex watcher mode that periodically reads `live_transcript.txt` and can suggest comments or follow-up questions when asked.
 - Package a small smoke-test command for generated system audio so future changes can quickly verify ScreenCaptureKit plus Realtime transcription.

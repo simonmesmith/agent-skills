@@ -30,6 +30,7 @@ recordings/
     formatted_transcript.md
     metadata.json
     recorder.log
+    audio-health.log
     audio-capture.log
     status-server.log
 ```
@@ -41,6 +42,8 @@ When the meeting stops, the controller writes `formatted_transcript.md` from the
 The legacy `recording.mp4` and `scripts/transcription.py` path remains available for finished-file transcription, but the default start command uses realtime transcription.
 
 While transcription is active, the controller starts a localhost preview page and stores its URL in `recordings/.current-recording.json`.
+
+By default, startup runs a short source-specific audio health check before declaring the recorder live. The check probes enabled microphone and system audio separately, records bytes captured, sample count, RMS, peak, thresholds, and warnings in `metadata.json`, and writes helper diagnostics to `audio-health.log`. If a source appears silent, report the warning to the user before the meeting continues. Use `--strict-audio-health-check` when startup should fail on a silent enabled source, or `--no-audio-health-check` only when debugging the health check itself.
 
 For debugging only, `start --save-events` writes `transcript_events.jsonl`, and `start --save-raw-audio` writes `input_audio.pcm`. Do not enable raw audio for ordinary meetings because PCM grows quickly.
 
@@ -80,6 +83,8 @@ Optional realtime settings:
 python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --delay minimal
 python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --no-system-audio
 python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --save-events
+python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --strict-audio-health-check
+python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --no-audio-health-check
 python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" start --workspace . --backend local-nemotron
 ```
 
@@ -144,6 +149,7 @@ Keep notes grounded in the transcript. If speaker labels are unavailable, do not
 - v2 uses `gpt-realtime-whisper` through `scripts/realtime_transcription.py`. The backend boundary is intentionally small so a local streaming ASR backend, such as Nemotron via NeMo/Riva, can be added later.
 - ScreenCaptureKit permission prompts are controlled by macOS.
 - The realtime worker uses `caffeinate` while capture is active because ScreenCaptureKit can fail to enumerate displays when the display is asleep.
+- A source-specific startup health check warns when microphone or system audio appears silent before the realtime worker starts.
 - A small local silence gate avoids sending empty audio commits during quiet moments.
 - Raw Realtime events and raw PCM audio are debug-only opt-ins, not normal meeting outputs.
 - The Swift helper still supports the legacy MP4 recording mode, but the realtime path uses `stream-pcm` to emit 24 kHz mono PCM for the Realtime API.

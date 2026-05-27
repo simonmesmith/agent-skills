@@ -67,7 +67,8 @@ def is_running(pid: int) -> bool:
 
 
 def build_helper() -> None:
-    if HELPER_BIN.exists():
+    swift_sources = list((HELPER_DIR / "Sources").rglob("*.swift"))
+    if HELPER_BIN.exists() and all(source.stat().st_mtime <= HELPER_BIN.stat().st_mtime for source in swift_sources):
         return
     subprocess.run(
         ["swift", "build", "-c", "release"],
@@ -388,6 +389,112 @@ def realtime_worker_command(args: argparse.Namespace, out_dir: Path) -> list[str
     return command
 
 
+def audio_health_thresholds(args: argparse.Namespace, source: str) -> tuple[float, float]:
+    if source == "microphone":
+        return args.mic_silence_threshold, args.mic_peak_threshold
+    return args.system_silence_threshold, args.system_peak_threshold
+
+
+def run_audio_health_check(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
+    command = [
+        str(HELPER_BIN),
+        "probe-audio",
+        "--duration",
+        str(args.audio_health_duration),
+    ]
+    if not args.system_audio:
+        command.append("--no-system-audio")
+    if not args.microphone:
+        command.append("--no-microphone")
+
+    log_path = out_dir / "audio-health.log"
+    started_at = datetime.now().isoformat(timespec="seconds")
+    result: dict[str, Any] = {
+        "enabled": True,
+        "started_at": started_at,
+        "duration_seconds": args.audio_health_duration,
+        "strict": bool(args.strict_audio_health_check),
+        "thresholds": {
+            "mic_silence_threshold": args.mic_silence_threshold,
+            "mic_peak_threshold": args.mic_peak_threshold,
+            "system_silence_threshold": args.system_silence_threshold,
+            "system_peak_threshold": args.system_peak_threshold,
+        },
+        "log_file": str(log_path),
+        "sources": {},
+        "warnings": [],
+    }
+
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=max(10.0, args.audio_health_duration + 8.0),
+        )
+    except subprocess.CalledProcessError as exc:
+        log_path.write_bytes((exc.stderr or b"") + (exc.stdout or b""))
+        raise SystemExit(f"Audio health check failed before recorder startup. Log:\n{log_path.read_text(errors='replace')}") from exc
+    except subprocess.TimeoutExpired as exc:
+        log_path.write_bytes((exc.stderr or b"") + (exc.stdout or b""))
+        raise SystemExit(f"Audio health check timed out before recorder startup. Log:\n{log_path.read_text(errors='replace')}") from exc
+
+    log_path.write_bytes(completed.stderr)
+    try:
+        probe_results = json.loads(completed.stdout.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Audio health check returned invalid JSON: {completed.stdout.decode('utf-8', errors='replace')}") from exc
+
+    expected_sources = []
+    if args.microphone:
+        expected_sources.append("microphone")
+    if args.system_audio:
+        expected_sources.append("system")
+
+    by_source = {str(item.get("source")): item for item in probe_results if isinstance(item, dict)}
+    for source in expected_sources:
+        item = by_source.get(source, {})
+        captured_bytes = int(item.get("capturedBytes", 0) or 0)
+        sample_count = int(item.get("sampleCount", 0) or 0)
+        rms = float(item.get("rms", 0.0) or 0.0)
+        peak = float(item.get("peak", 0.0) or 0.0)
+        silence_threshold, peak_threshold = audio_health_thresholds(args, source)
+        status = "ok"
+        message = ""
+        if captured_bytes <= 0 or sample_count <= 0:
+            status = "silent"
+            message = f"{source.title()} stream produced no captured samples."
+        elif rms < silence_threshold and peak < peak_threshold:
+            status = "silent"
+            if source == "microphone":
+                message = "Microphone stream appears silent. Check macOS input device, Zoom input device, and microphone permissions."
+            else:
+                message = "System audio stream appears silent. Check macOS Screen Recording permission and confirm meeting audio is playing."
+
+        source_result = {
+            "status": status,
+            "captured_bytes": captured_bytes,
+            "sample_count": sample_count,
+            "rms": rms,
+            "peak": peak,
+            "silence_threshold": silence_threshold,
+            "peak_threshold": peak_threshold,
+            "message": message,
+        }
+        result["sources"][source] = source_result
+        if message:
+            result["warnings"].append(message)
+
+    result["completed_at"] = datetime.now().isoformat(timespec="seconds")
+    if result["warnings"]:
+        for warning in result["warnings"]:
+            print(f"audio_health_warning: {warning}", file=sys.stderr)
+        if args.strict_audio_health_check:
+            raise SystemExit("Audio health check failed:\n" + "\n".join(result["warnings"]))
+    return result
+
+
 def start(args: argparse.Namespace) -> None:
     workspace = args.workspace.resolve()
     existing = load_state(workspace)
@@ -404,6 +511,10 @@ def start(args: argparse.Namespace) -> None:
     transcript_file = out_dir / "live_transcript.txt"
     log_file = out_dir / "recorder.log"
     metadata_file = out_dir / "metadata.json"
+    audio_health_check: dict[str, Any] = {"enabled": False}
+
+    if args.audio_health_check:
+        audio_health_check = run_audio_health_check(args, out_dir)
 
     command = realtime_worker_command(args, out_dir)
 
@@ -432,6 +543,7 @@ def start(args: argparse.Namespace) -> None:
         "language": args.language,
         "system_audio": bool(args.system_audio),
         "microphone": bool(args.microphone),
+        "audio_health_check": audio_health_check,
     }
     if args.save_raw_audio:
         state["raw_audio_file"] = str(out_dir / "input_audio.pcm")
@@ -596,6 +708,13 @@ def main() -> int:
     start_parser.add_argument("--audio-chunk-ms", type=int, default=100)
     start_parser.add_argument("--silence-threshold", type=float, default=20.0)
     start_parser.add_argument("--peak-threshold", type=float, default=250.0)
+    start_parser.add_argument("--audio-health-check", action=argparse.BooleanOptionalAction, default=True)
+    start_parser.add_argument("--strict-audio-health-check", action="store_true", help="Fail startup when an enabled audio source appears silent")
+    start_parser.add_argument("--audio-health-duration", type=float, default=3.0)
+    start_parser.add_argument("--mic-silence-threshold", type=float, default=10.0)
+    start_parser.add_argument("--mic-peak-threshold", type=float, default=120.0)
+    start_parser.add_argument("--system-silence-threshold", type=float, default=10.0)
+    start_parser.add_argument("--system-peak-threshold", type=float, default=120.0)
     start_parser.add_argument("--trailing-silence-chunks", type=int, default=5)
     start_parser.add_argument("--save-events", action="store_true", help="Debug only: save raw Realtime events as transcript_events.jsonl")
     start_parser.add_argument("--save-raw-audio", action="store_true", help="Debug only: save streamed PCM audio as input_audio.pcm")
