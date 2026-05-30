@@ -146,36 +146,126 @@ def cleanup_stale_state(workspace: Path, state: dict[str, Any]) -> None:
     clear_state(workspace)
 
 
-def format_transcript_text(text: str) -> str:
-    text = re.sub(r"[ \t]+", " ", text.replace("\r\n", "\n")).strip()
-    if not text:
-        return ""
-    sentences = re.split(r"(?<=[.!?])\s+", text)
-    paragraphs: list[str] = []
-    current: list[str] = []
-    current_words = 0
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if not sentence:
+def transcript_source_counts(text: str) -> dict[str, int]:
+    counts = {"Microphone": 0, "System": 0, "Unlabeled": 0}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
             continue
-        words = len(sentence.split())
-        if current and current_words + words > 90:
-            paragraphs.append(" ".join(current))
-            current = []
-            current_words = 0
-        current.append(sentence)
-        current_words += words
-    if current:
-        paragraphs.append(" ".join(current))
-    return "\n\n".join(paragraphs) + "\n"
+        match = re.match(r"^\[(Microphone|System)\]\s+", stripped)
+        if match:
+            counts[match.group(1)] += 1
+        else:
+            counts["Unlabeled"] += 1
+    return counts
 
 
-def write_formatted_transcript(recording_dir: Path, live_transcript: Path) -> Path:
+def markdown_bullet(value: Any) -> str:
+    if value in (None, ""):
+        return "Unknown"
+    return str(value).replace("\n", " ").strip()
+
+
+def build_transcript_formatting_prompt(recording_dir: Path, live_transcript: Path, state: dict[str, Any] | None = None) -> str:
+    metadata = state or {}
+    raw_text = live_transcript.read_text(encoding="utf-8", errors="replace") if live_transcript.exists() else ""
+    counts = transcript_source_counts(raw_text)
+    workspace = Path(str(metadata.get("workspace") or recording_dir.parent.parent)).resolve()
+    workspace_files: list[str] = []
+    if workspace.exists():
+        for path in sorted(workspace.rglob("*")):
+            if path.is_file() and ".git" not in path.parts:
+                try:
+                    workspace_files.append(str(path.relative_to(workspace)))
+                except ValueError:
+                    workspace_files.append(str(path))
+                if len(workspace_files) >= 50:
+                    break
+
+    workspace_file_list = "\n".join(f"- `{path}`" for path in workspace_files) or "- None found"
+    source_note = (
+        "Treat `[Microphone]` as `You` and `[System]` as `Others`. "
+        "These are deterministic audio-source labels, not true speaker diarization."
+    )
+    attendee_note = (
+        "Do not assume that every named person was on the call. Transcript-only attendee inference is unreliable "
+        "because people may discuss absent colleagues, clients, partners, or future invitees. If attendees are not "
+        "provided by the user or meeting metadata, separate confirmed participants from possible participants and "
+        "people merely mentioned."
+    )
+    return f"""# Transcript Formatting Subagent Task
+
+Create a polished final Markdown transcript at:
+
+`{recording_dir / "formatted_transcript.md"}`
+
+## Required Output
+
+Use this structure:
+
+1. `# <meeting title>`
+2. `## Description` with a short summary that makes the meeting easy to recognize later.
+3. `## Participants and Mentioned People` with confirmed participants, possible participants, and people merely mentioned. Mark every non-confirmed item clearly.
+4. `## Source and Quality Notes` with source labels, transcript quality, and any capture warnings.
+5. `## Formatted Transcript` with readable Markdown paragraphs. Use `**You:**` for `[Microphone]` and `**Others:**` for `[System]`.
+6. `## Assumptions and Corrections` listing spelling fixes, vocabulary guesses, speaker/attendee uncertainty, and any other formatting assumptions.
+
+## Formatting Rules
+
+- Preserve the meaning of the source transcript. Do not invent substantive facts.
+- Combine tiny chunks into logical sentences and paragraphs.
+- Add capitalization and punctuation where appropriate.
+- Use headings, bold labels, and short paragraphs to make the transcript easy to read.
+- Fix likely spellings using meeting context and workspace context when available.
+- Document every meaningful correction or inference in the assumptions section.
+- Keep raw transcript artifacts unchanged for audit.
+- {source_note}
+- {attendee_note}
+
+## Recording Metadata
+
+- Recording directory: `{recording_dir}`
+- Workspace: `{workspace}`
+- Started at: {markdown_bullet(metadata.get("started_at"))}
+- Stopped at: {markdown_bullet(metadata.get("stopped_at"))}
+- Model: {markdown_bullet(metadata.get("model"))}
+- Backend: {markdown_bullet(metadata.get("backend"))}
+- Delay: {markdown_bullet(metadata.get("delay"))}
+- Language: {markdown_bullet(metadata.get("language"))}
+- Source overlap policy: {markdown_bullet(metadata.get("source_overlap_policy"))}
+- Microphone chunks: {counts["Microphone"]}
+- System chunks: {counts["System"]}
+- Unlabeled chunks: {counts["Unlabeled"]}
+- Audio health warnings: {markdown_bullet("; ".join(metadata.get("audio_health_check", {}).get("warnings", [])))}
+
+## Workspace Files Available For Context
+
+{workspace_file_list}
+
+## Raw Source Transcript
+
+```text
+{raw_text.rstrip()}
+```
+"""
+
+
+def write_formatting_prompt(recording_dir: Path, live_transcript: Path, state: dict[str, Any] | None = None) -> Path:
+    prompt_path = recording_dir / "transcript_formatting_prompt.md"
+    prompt_path.write_text(build_transcript_formatting_prompt(recording_dir, live_transcript, state), encoding="utf-8")
+    return prompt_path
+
+
+def write_formatted_transcript_placeholder(recording_dir: Path, prompt_path: Path) -> Path:
     formatted_path = recording_dir / "formatted_transcript.md"
-    if live_transcript.exists():
-        formatted_path.write_text(format_transcript_text(live_transcript.read_text(encoding="utf-8", errors="replace")), encoding="utf-8")
-    else:
-        formatted_path.write_text("", encoding="utf-8")
+    formatted_path.write_text(
+        "# Transcript Formatting Pending\n\n"
+        "This file is reserved for the post-meeting formatted transcript.\n\n"
+        "Launch a Codex subagent with the task in "
+        f"`{prompt_path.name}` and have it replace this placeholder with the final Markdown transcript.\n\n"
+        "Raw audit artifacts remain available in `live_transcript.txt` and `metadata.json`.\n",
+        encoding="utf-8",
+    )
     return formatted_path
 
 
@@ -392,7 +482,9 @@ def stop_active_recording(workspace: Path, timeout: float, *, transcribe_after: 
     if state.get("transcript_file"):
         transcript_file = Path(state["transcript_file"])
         state["transcript_size_bytes"] = transcript_file.stat().st_size if transcript_file.exists() else 0
-        formatted_path = write_formatted_transcript(Path(state["recording_dir"]), transcript_file)
+        formatting_prompt_path = write_formatting_prompt(Path(state["recording_dir"]), transcript_file, state)
+        formatted_path = write_formatted_transcript_placeholder(Path(state["recording_dir"]), formatting_prompt_path)
+        state["transcript_formatting_prompt_file"] = str(formatting_prompt_path)
         state["formatted_transcript_file"] = str(formatted_path)
         state["formatted_transcript_size_bytes"] = formatted_path.stat().st_size
 
@@ -819,6 +911,29 @@ def transcribe(args: argparse.Namespace) -> None:
     transcribe_recording(args.workspace.resolve(), args.recording_dir)
 
 
+def prepare_formatting(args: argparse.Namespace) -> None:
+    recording_dir = args.recording_dir.resolve()
+    metadata_path = recording_dir / "metadata.json"
+    metadata: dict[str, Any] = {}
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    transcript_file = Path(str(metadata.get("transcript_file") or recording_dir / "live_transcript.txt"))
+    if not transcript_file.is_absolute():
+        transcript_file = recording_dir / transcript_file
+    if not transcript_file.exists():
+        raise SystemExit(f"Missing transcript file: {transcript_file}")
+    formatting_prompt_path = write_formatting_prompt(recording_dir, transcript_file, metadata)
+    formatted_path = write_formatted_transcript_placeholder(recording_dir, formatting_prompt_path)
+    metadata["transcript_formatting_prompt_file"] = str(formatting_prompt_path)
+    metadata["formatted_transcript_file"] = str(formatted_path)
+    metadata["formatted_transcript_size_bytes"] = formatted_path.stat().st_size
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps({
+        "formatted_transcript_file": str(formatted_path),
+        "transcript_formatting_prompt_file": str(formatting_prompt_path),
+    }, indent=2, sort_keys=True))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Control Codex Meeting Recorder recordings.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -868,6 +983,10 @@ def main() -> int:
     transcribe_parser.add_argument("--workspace", type=Path, default=Path.cwd())
     transcribe_parser.add_argument("--recording-dir", type=Path)
     transcribe_parser.set_defaults(func=transcribe)
+
+    formatting_parser = subparsers.add_parser("prepare-formatting")
+    formatting_parser.add_argument("recording_dir", type=Path)
+    formatting_parser.set_defaults(func=prepare_formatting)
 
     args = parser.parse_args()
     args.func(args)

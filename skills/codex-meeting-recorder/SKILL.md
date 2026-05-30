@@ -27,6 +27,7 @@ recordings/
   YYYY-MM-DD-HHMMSS/
     recording.mp4
     live_transcript.txt
+    transcript_formatting_prompt.md
     formatted_transcript.md
     metadata.json
     recorder.log
@@ -37,7 +38,11 @@ recordings/
 
 In v2, `live_transcript.txt` is the canonical live text stream. The preview reads this file and renders only the transcript text plus a blinking cursor while transcription is active. Codex should also use this file as the source of truth when answering questions during the meeting. Live text is source-labeled as `[Microphone]` or `[System]` because the realtime worker runs separate transcription sessions for microphone and system audio. The preview page renders these plain-text tags as small icon badges, but the transcript file stays plain text for search, audit, and downstream formatting.
 
-When the meeting stops, the controller writes `formatted_transcript.md` from the live stream for future reading and final summarization. Treat `formatted_transcript.md` as a post-meeting artifact, not a live source.
+When the meeting stops, the controller writes `transcript_formatting_prompt.md` and a pending `formatted_transcript.md` placeholder. Treat `formatted_transcript.md` as a post-meeting artifact, not a live source. Launch a Codex subagent with the formatting prompt so it can replace the placeholder with a readable final Markdown transcript while the main agent prepares meeting notes.
+
+The formatted transcript should include a meeting title, a short description, participants and mentioned people, source and quality notes, a readable transcript, and assumptions/corrections. The subagent should use `**You:**` for `[Microphone]` and `**Others:**` for `[System]`, combine chunks into logical sentences and paragraphs, fix likely spellings from transcript and workspace context, and document meaningful inferences or corrections. Source labels are deterministic audio-source labels only; do not present them as true speaker diarization.
+
+Attendee inference is a known weak spot. Unless the user or calendar metadata identifies the participants, do not assume every named person was present. People may mention absent colleagues, future invitees, clients, partners, or decision-makers. In the final artifact, separate confirmed participants from possible participants and people merely mentioned, and include a note that names inferred from the transcript may not reflect actual attendance.
 
 The legacy `recording.mp4` and `scripts/transcription.py` path remains available for finished-file transcription, but the default start command uses realtime transcription.
 
@@ -127,6 +132,12 @@ Transcribe the latest stopped recording:
 python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" transcribe --workspace .
 ```
 
+Prepare a formatting prompt for an existing realtime recording:
+
+```bash
+python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" prepare-formatting recordings/YYYY-MM-DD-HHMMSS
+```
+
 ## Workflow
 
 1. Start live transcription when the user asks.
@@ -135,7 +146,11 @@ python3 "$CODEX_MEETING_RECORDER_SKILL/scripts/recorderctl.py" transcribe --work
 4. Leave the background realtime worker running until the user asks to stop.
 5. If the user asks questions during the meeting, load or search the active `transcript_file`; do not build a separate preview API client.
 6. Stop the worker with `recorderctl.py stop --workspace .`.
-7. Read `formatted_transcript_file` when available, otherwise `transcript_file`, and provide concise meeting notes in the thread.
+7. Launch a subagent to create the final formatted transcript:
+   - Give it `transcript_formatting_prompt_file` from the stop/status JSON.
+   - Tell it to replace `formatted_transcript_file`.
+   - Keep `live_transcript.txt`, `metadata.json`, and other raw artifacts unchanged for audit.
+8. Read the subagent-produced `formatted_transcript_file` when available, otherwise `transcript_file`, and provide concise meeting notes in the thread.
 
 ## Notes Style
 
