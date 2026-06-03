@@ -29,6 +29,7 @@ DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_QUALITY = "low"
 DEFAULT_SIZE = "1024x1024"
 DEFAULT_FORMAT = "png"
+DEFAULT_UV_CACHE_DIR = Path("/private/tmp/uv-cache-codex-mood-board")
 TITLE = "Mood Board"
 
 
@@ -121,6 +122,21 @@ def next_batch_number(manifest: dict[str, Any]) -> int:
     if not batches:
         return 1
     return max(int(batch.get("batch_number", 0)) for batch in batches) + 1
+
+
+def next_available_batch_number(manifest: dict[str, Any], output_dir: Path) -> int:
+    batch_number = next_batch_number(manifest)
+    existing_numbers = []
+    for path in output_dir.glob("batch-[0-9][0-9][0-9]-*"):
+        if not path.is_dir():
+            continue
+        try:
+            existing_numbers.append(int(path.name.split("-", 2)[1]))
+        except (IndexError, ValueError):
+            continue
+    if existing_numbers:
+        batch_number = max(batch_number, max(existing_numbers) + 1)
+    return batch_number
 
 
 def reference_entries(spec: dict[str, Any]) -> list[Any]:
@@ -344,8 +360,22 @@ def cli_command(python_command: list[str], cli: Path, jobs_path: Path, batch_dir
     return command
 
 
+def command_env(command: list[str]) -> dict[str, str]:
+    env = os.environ.copy()
+    if command and Path(command[0]).name == "uv":
+        env.setdefault("UV_CACHE_DIR", str(DEFAULT_UV_CACHE_DIR))
+    return env
+
+
 def run_command(command: list[str], batch_dir: Path, label: str) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    result = subprocess.run(
+        command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        env=command_env(command),
+    )
     (batch_dir / f"{label}.stdout.txt").write_text(result.stdout, encoding="utf-8")
     (batch_dir / f"{label}.stderr.txt").write_text(result.stderr, encoding="utf-8")
     return result
@@ -788,7 +818,8 @@ def main() -> None:
                     "for automatic dependency isolation. Install with `uv pip install openai` or run via "
                     "`uv run --with openai`."
                 )
-            sdk_status = f"available through uv fallback at {uv}"
+            uv_cache_dir = os.environ.get("UV_CACHE_DIR", str(DEFAULT_UV_CACHE_DIR))
+            sdk_status = f"available through uv fallback at {uv} with UV_CACHE_DIR={uv_cache_dir}"
         print(f"OK: imagegen CLI found at {cli}")
         print("OK: OPENAI_API_KEY is set locally")
         print(f"OK: openai Python SDK {sdk_status}")
@@ -810,7 +841,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "manifest.json"
     manifest = load_manifest(manifest_path)
-    batch_number = next_batch_number(manifest)
+    batch_number = next_available_batch_number(manifest, output_dir)
     timestamp = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
     spec = read_json(spec_path)

@@ -21,7 +21,7 @@ Create compact local mood boards from generated image batches. This skill is sta
 3. Default to 6 images when no count is specified. Accept follow-up requests for more images, up to 25 images in one batch.
 4. Generate one distinct prompt per image. Do not use `n` as a substitute for separate creative directions.
 5. Use the OpenAI Image API CLI path via `scripts/generate_mood_board.py`; do not use the built-in `image_gen` tool for this workflow.
-6. Require `OPENAI_API_KEY` locally. If the key is missing, explain that the user must set it in their shell or Codex environment; never ask them to paste it into chat. The script uses the system imagegen CLI, which requires the Python `openai` SDK for real API calls; if the active environment is missing it and `uv` is available, the script automatically retries with `uv run --with openai`.
+6. Require `OPENAI_API_KEY` locally. If the key is missing, explain that the user must set it in their shell or Codex environment; never ask them to paste it into chat. The script uses the system imagegen CLI, which requires the Python `openai` SDK for real API calls; if the active environment is missing it and `uv` is available, the script automatically retries with `uv run --with openai` and points `UV_CACHE_DIR` at `/private/tmp/uv-cache-codex-mood-board` unless the environment already sets it.
 7. Save outputs in a durable local output folder, then return the `index.html` path and tell the user to open it in Codex preview/browser.
 8. The preview header should say: `Use Ctrl + Click to add images and annotations to the thread.`
 9. Show short mood or direction names under each image, not full prompts. Store those names in each batch as `mood_names`; the user can ask for the underlying prompt when needed.
@@ -72,6 +72,8 @@ For validation without API calls, use `--mock-images`. For API payload checks wi
 After HTML/CSS-only script changes, use `--rebuild-html --output-dir <board-folder>` to rebuild the preview from the existing manifest without creating a new batch.
 
 Use the default `mood-boards/codex-mood-board` folder for local experiments. The repo ignores `mood-boards/`, so generated batches, previews, and manifests stay out of git.
+
+If generation fails after creating a partial batch folder, rerun the same command against the same output directory. The script skips existing `batch-###-*` folders and writes the retry as the next batch, preserving the failed folder for diagnostics.
 
 For multiple mood boards in one project, keep one output folder per board, for example:
 
