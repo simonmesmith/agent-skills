@@ -102,6 +102,7 @@ ipython_config.py
 # uv.lock
 .build/
 recordings/
+mood-boards/
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.

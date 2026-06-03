@@ -1,0 +1,10 @@
+interface:
+  display_name: "Codex Mood Board"
+  short_description: "Generate local mood-board image batches"
+  icon_small: "./assets/mood-board-icon.png"
+  icon_large: "./assets/mood-board-icon.png"
+  brand_color: "#F06C4F"
+  default_prompt: "Use $codex-mood-board to create a six-image mood board for a new visual direction."
+
+policy:
+  allow_implicit_invocation: true
