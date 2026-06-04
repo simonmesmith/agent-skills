@@ -1,0 +1,10 @@
+interface:
+  display_name: "Codex Draw"
+  short_description: "Shared local vector drawing board"
+  icon_small: "./assets/codex-draw-icon.png"
+  icon_large: "./assets/codex-draw-icon.png"
+  brand_color: "#339CFF"
+  default_prompt: "Use $codex-draw to open a shared drawing board and create a simple editable SVG scene."
+
+policy:
+  allow_implicit_invocation: true

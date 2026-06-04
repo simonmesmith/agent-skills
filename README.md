@@ -9,6 +9,7 @@ If you have an issue, you can log it with the appropriate `skill:skill-name` lab
 ## Skills Available
 
 - `codex-meeting-recorder`: Record and live-transcribe meetings from a Codex thread.
+- `codex-draw`: Launch a shared local vector drawing board with scene JSON, API edits, and SVG export.
 - `codex-mood-board`: Generate local mood-board image batches and HTML previews.
 - `podcast-generator`: Build reviewable podcast packages from documents or scripts.
 - `polished-presentations`: Produce polished executive/client presentation workflows.

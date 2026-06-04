@@ -103,6 +103,7 @@ ipython_config.py
 .build/
 recordings/
 mood-boards/
+/drawings/
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.

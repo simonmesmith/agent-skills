@@ -1,0 +1,438 @@
+:root {
+  color-scheme: light dark;
+  --draw-accent: var(--codex-base-accent, #339cff);
+  --draw-surface: var(--codex-base-surface, #ffffff);
+  --draw-ink: var(--codex-base-ink, #1a1c1f);
+  --draw-muted: color-mix(in srgb, var(--draw-ink) 58%, var(--draw-surface));
+  --draw-border: color-mix(in srgb, var(--draw-ink) 12%, var(--draw-surface));
+  --draw-panel: color-mix(in srgb, var(--draw-ink) 3%, var(--draw-surface));
+  --draw-active: color-mix(in srgb, var(--draw-accent) 13%, var(--draw-surface));
+  --draw-danger: #ba2623;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--draw-surface);
+  color: var(--draw-ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --draw-surface: var(--codex-base-surface, #181818);
+    --draw-ink: var(--codex-base-ink, #f4f4f4);
+    --draw-panel: color-mix(in srgb, var(--draw-ink) 7%, var(--draw-surface));
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--draw-surface);
+  color: var(--draw-ink);
+  overflow: hidden;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-rows: 48px 1fr;
+  height: 100vh;
+  max-width: 100vw;
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--draw-border);
+  background: var(--draw-surface);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 150px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  display: block;
+  object-fit: cover;
+  border: 1px solid var(--draw-border);
+  border-radius: 7px;
+  background: var(--draw-panel);
+}
+
+.status {
+  flex: 1;
+  min-width: 0;
+  color: var(--draw-muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-icon-button,
+.icon-button,
+.tool {
+  border: 1px solid var(--draw-border);
+  background: var(--draw-panel);
+  color: var(--draw-ink);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.header-icon-button {
+  width: 34px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.header-icon-button:hover,
+.icon-button:hover,
+.tool:hover {
+  border-color: color-mix(in srgb, var(--draw-accent) 70%, var(--draw-border));
+}
+
+.header-icon-button:focus,
+.icon-button:focus,
+.tool:focus,
+.objects button:focus {
+  outline: none;
+}
+
+.header-icon-button:focus-visible,
+.icon-button:focus-visible,
+.tool:focus-visible,
+.objects button:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--draw-ink) 24%, transparent);
+  outline-offset: 2px;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) 300px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.toolbar,
+.panel {
+  border-right: 1px solid var(--draw-border);
+  background: var(--draw-panel);
+}
+
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 8px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tool {
+  width: 38px;
+  height: 34px;
+  font-size: 12px;
+  font-weight: 650;
+  display: grid;
+  place-items: center;
+}
+
+.header-icon-button svg,
+.tool svg,
+.icon-button svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tool[data-tool="select"] svg {
+  fill: currentColor;
+  stroke-width: 0;
+}
+
+.tool.active {
+  border-color: color-mix(in srgb, var(--draw-ink) 20%, var(--draw-border));
+  background: color-mix(in srgb, var(--draw-ink) 5%, var(--draw-surface));
+}
+
+.tool.danger {
+  margin-top: auto;
+  color: var(--draw-danger);
+}
+
+.hidden {
+  display: none !important;
+}
+
+.canvas-wrap {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--draw-ink) 2%, var(--draw-surface));
+}
+
+.canvas {
+  width: min(100%, 1200px);
+  height: auto;
+  aspect-ratio: 3 / 2;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--draw-ink) 6%, transparent) 1px, transparent 1px),
+    linear-gradient(color-mix(in srgb, var(--draw-ink) 6%, transparent) 1px, transparent 1px),
+    var(--canvas-background, #ffffff);
+  background-size: 24px 24px, 24px 24px, auto;
+  border: 1px dashed color-mix(in srgb, var(--draw-ink) 16%, transparent);
+  box-shadow: none;
+  touch-action: none;
+}
+
+.artboard-background {
+  pointer-events: none;
+}
+
+.object {
+  cursor: grab;
+}
+
+.object.selected {
+  outline: none;
+}
+
+.selection-box {
+  fill: none;
+  stroke: var(--draw-accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+
+.resize-handle,
+.endpoint-handle,
+.rotate-handle {
+  fill: var(--draw-accent);
+  stroke: #fff;
+  stroke-width: 1;
+}
+
+.resize-handle {
+  cursor: nwse-resize;
+}
+
+.endpoint-handle {
+  cursor: grab;
+}
+
+.rotate-stem {
+  stroke: var(--draw-accent);
+  stroke-width: 1.2;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+
+.rotate-handle {
+  cursor: crosshair;
+}
+
+.panel {
+  border-right: 0;
+  border-left: 1px solid var(--draw-border);
+  overflow: auto;
+  padding: 14px;
+  min-height: 0;
+}
+
+.panel section + section {
+  margin-top: 20px;
+}
+
+h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+label {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  color: var(--draw-muted);
+  font-size: 12px;
+}
+
+input[type="text"],
+input[type="number"] {
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid var(--draw-border);
+  border-radius: 7px;
+  padding: 4px 8px;
+  background: var(--draw-surface);
+  color: var(--draw-ink);
+}
+
+input[type="color"] {
+  width: 44px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--draw-border);
+  border-radius: 7px;
+  background: var(--draw-surface);
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+}
+
+.field-grid label {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+}
+
+.geometry-grid label {
+  grid-template-columns: 24px minmax(0, 1fr);
+}
+
+.style-grid label {
+  grid-template-columns: minmax(0, 1fr) 48px;
+  white-space: nowrap;
+}
+
+.style-grid input[type="color"],
+.style-grid input[type="number"] {
+  width: 100%;
+}
+
+.geometry-symbol {
+  display: inline-block;
+  justify-self: start;
+  text-align: center;
+  color: var(--draw-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.icon-button {
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  font-size: 12px;
+  display: grid;
+  place-items: center;
+}
+
+.objects {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.objects button {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid var(--draw-border);
+  border-radius: 7px;
+  padding: 0 8px;
+  background: var(--draw-surface);
+  color: var(--draw-ink);
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.objects li {
+  border-radius: 7px;
+}
+
+.objects li.drag-over {
+  outline: 2px solid color-mix(in srgb, var(--draw-accent) 35%, transparent);
+  outline-offset: 1px;
+}
+
+.objects button.active {
+  border-color: var(--draw-accent);
+  background: var(--draw-active);
+}
+
+.object-name-input {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid var(--draw-accent);
+  border-radius: 7px;
+  padding: 0 8px;
+  background: var(--draw-surface);
+  color: var(--draw-ink);
+  font-size: 13px;
+}
+
+.text-editor-input {
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--draw-accent);
+  border-radius: 4px;
+  padding: 0 4px;
+  background: color-mix(in srgb, var(--draw-surface) 92%, transparent);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.15;
+}
+
+@media (max-width: 860px) {
+  .workspace {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .panel {
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid var(--draw-border);
+    max-height: 40vh;
+  }
+}
