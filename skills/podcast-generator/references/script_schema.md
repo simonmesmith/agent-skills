@@ -20,6 +20,20 @@ Recommended:
 | `notes` | Internal/client notes, unresolved questions, or audio direction. |
 | `pronunciation` | Optional pronunciation note for this row only. |
 
+Pronunciation glossary files use these columns:
+
+| column | purpose |
+| --- | --- |
+| `term` | Exact term to control in ElevenLabs. |
+| `type` | Human review category such as `brand-or-product`, `medical-term`, `acronym`, or `proper-name`. |
+| `source` | Source file or note where the term was found. |
+| `pronunciation` | IPA phoneme string or alias text, depending on `pronunciation_kind`. |
+| `pronunciation_kind` | `phoneme`, `alias`, or `review`. Use `phoneme` with IPA for highest precision. |
+| `alphabet` | Use `ipa` for phoneme rows. Leave blank for alias/review rows. |
+| `language_code` | Optional language hint such as `en-US`. |
+| `status` | `draft`, `approved`, or `tested`. Export only approved/tested rows. |
+| `notes` | Review notes, source of pronunciation, or smoke-test result. |
+
 Production:
 
 | column | purpose |

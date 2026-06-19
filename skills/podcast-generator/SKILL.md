@@ -20,7 +20,8 @@ Keep the user flow short. Ask at most two setup questions for document-driven wo
 3. Check pronunciation guidance before final script approval:
    - Look for files named like `pronunciation.csv`, `glossary.*`, `brand_terms.*`, or brand/medical notes in the source set.
    - If no guidance exists, identify high-risk terms such as brands, drug names, acronyms, mechanisms, institutions, and names, then create a lightweight pronunciation glossary for review.
-   - Be conservative with glossary casing and term types for ElevenLabs: uppercase pronunciation cues or marking non-acronym brand/product names as acronyms can cause the model to spell words out as letters. Use lowercase phonetic cues when possible, and classify a term as an acronym only when it should actually be read letter-by-letter.
+   - Prefer ElevenLabs pronunciation dictionaries for approved high-risk terms. Use IPA phoneme rules when the pronunciation must be exact, and alias rules for expansions or simpler spoken substitutions.
+   - Be conservative with glossary casing and term types for ElevenLabs: uppercase pronunciation cues or marking non-acronym brand/product names as acronyms can cause the model to spell words out as letters. Use lowercase alias cues only when falling back to text replacement, and classify a term as an acronym only when it should actually be read letter-by-letter.
    - Do not hardcode medical pronunciations into the skill.
 4. Validate the script table with `scripts/validate_script.py`.
 5. After user/client approval, optionally renumber inserted IDs with `scripts/renumber_script.py`.
@@ -91,8 +92,18 @@ host_b: Sarah - Mature, Reassuring, Confident (EXAVITQu4vr4xnSDxMaL)
 When an approved pronunciation glossary exists, pass it during generation:
 
 ```bash
-python scripts/generate_audio.py script.csv --pronunciation-glossary pronunciation_glossary.csv --voice host_a=VOICE_ID_A --voice host_b=VOICE_ID_B
+python scripts/build_pronunciation_dictionary.py pronunciation_glossary.csv \
+  --create \
+  --out-manifest pronunciation_dictionary_manifest.json \
+  --out-pls pronunciation.pls
+
+python scripts/generate_audio.py script.csv \
+  --pronunciation-manifest pronunciation_dictionary_manifest.json \
+  --voice host_a=VOICE_ID_A \
+  --voice host_b=VOICE_ID_B
 ```
+
+Use `--pronunciation-glossary` only as a fallback when an ElevenLabs dictionary locator is unavailable. It rewrites the request payload with text substitutions, which is less precise than IPA phoneme rules and more prone to casing/acronym mistakes.
 
 The script writes ordered audio plus `audio_manifest.csv`. If the manifest has one generated chunk, that MP3 is already the usable episode segment. Use `scripts/merge_audio.py` to create the final episode when there are multiple chunks.
 
@@ -114,3 +125,4 @@ Load `references/revision_workflow.md` before comparing a returned client file t
 - `scripts/merge_audio.py`: concatenate manifest audio with FFmpeg.
 - `scripts/compare_revisions.py`: compare old and revised script tables and report reuse/regeneration actions.
 - `scripts/extract_pronunciation_glossary.py`: create a review starter glossary from source text.
+- `scripts/build_pronunciation_dictionary.py`: create or update ElevenLabs pronunciation dictionaries from approved glossary rows, and export JSON/PLS review artifacts.

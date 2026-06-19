@@ -80,6 +80,10 @@ def main() -> int:
                         "type": classify(term),
                         "source": str(path),
                         "pronunciation": "",
+                        "pronunciation_kind": "review",
+                        "alphabet": "",
+                        "language_code": "",
+                        "status": "draft",
                         "notes": "Review before audio generation.",
                     },
                 )
@@ -87,7 +91,20 @@ def main() -> int:
     rows = sorted(found.values(), key=lambda row: (row["type"], row["term"].lower()))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["term", "type", "source", "pronunciation", "notes"])
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "term",
+                "type",
+                "source",
+                "pronunciation",
+                "pronunciation_kind",
+                "alphabet",
+                "language_code",
+                "status",
+                "notes",
+            ],
+        )
         writer.writeheader()
         writer.writerows(rows)
 

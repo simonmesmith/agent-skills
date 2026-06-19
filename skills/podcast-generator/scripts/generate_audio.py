@@ -42,6 +42,18 @@ def parse_locator(values: list[str]) -> list[dict[str, str]]:
     return locators
 
 
+def load_manifest_locators(values: list[Path]) -> list[dict[str, str]]:
+    locators: list[dict[str, str]] = []
+    for path in values:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        dictionary_id = str(manifest.get("pronunciation_dictionary_id") or "")
+        version_id = str(manifest.get("version_id") or "")
+        if not dictionary_id or not version_id:
+            raise SystemExit(f"{path}: missing pronunciation_dictionary_id or version_id.")
+        locators.append({"pronunciation_dictionary_id": dictionary_id, "version_id": version_id})
+    return locators
+
+
 def load_pronunciation_glossary(path: Path | None) -> list[tuple[str, str]]:
     if path is None:
         return []
@@ -113,6 +125,7 @@ def main() -> int:
     parser.add_argument("--seed", type=int)
     parser.add_argument("--language-code")
     parser.add_argument("--pronunciation-locator", action="append", default=[], help="dictionary_id:version_id")
+    parser.add_argument("--pronunciation-manifest", action="append", default=[], type=Path, help="JSON manifest from build_pronunciation_dictionary.py.")
     parser.add_argument("--pronunciation-glossary", type=Path, help="CSV/XLSX with term and pronunciation columns.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -136,7 +149,9 @@ def main() -> int:
     audio_dir = args.out_dir / ("lines" if args.mode == "line" else "chunks")
     audio_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = args.out_dir / "audio_manifest.csv"
-    locators = parse_locator(args.pronunciation_locator)
+    locators = parse_locator(args.pronunciation_locator) + load_manifest_locators(args.pronunciation_manifest)
+    if len(locators) > 3:
+        raise SystemExit("ElevenLabs supports up to 3 pronunciation dictionary locators per request.")
     pronunciation_replacements = load_pronunciation_glossary(args.pronunciation_glossary)
     manifest: list[dict[str, str]] = []
 
